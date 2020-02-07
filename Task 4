@@ -1,0 +1,752 @@
+#define  F_CPU 14745600
+#include <avr/io.h>
+#include <avr/interrupt.h>
+#include <util/delay.h>
+//#include "lcd\lcd.h"
+int threshold=50;
+int sensor_values[3];
+////////////////////////////////////////////all about motor///////////////////////////////////////////////////////////////////////////
+int left=0;
+int right=0;
+int wls_left;
+int wls_middle;
+int wls_right;
+int count=0;
+void all_init()
+{
+	
+	//left motor pins 0 and 1
+	//right motor pins 2 and 3
+	DDRD=0x0f;
+	PORTD =0x00;
+	DDRL=0xFF;
+	PORTL=0xFF;
+	DDRH=0xFF;
+	PORTH=0xFF;
+	//timer setup.........................
+	//left and right motors pwm speed registers()
+	TCCR5A = 0xA9;
+	TCCR5B = 0x0B;
+	TCNT5H = 0xFF;
+	TCNT5L = 0x00;
+	OCR5AH = 0x00;//PL3
+	OCR5AL = 0xFF;
+	OCR5BH = 0x00;//PL4
+	OCR5BL = 0xFF;
+	
+	
+	//servo connections
+	DDRB=0xFF;
+	PORTB=0xff;
+	DDRH=0xFF;
+	PORTH=0xff;
+	DDRH=0xFF;
+	PORTH=0xff;
+	//Servos pwm registers
+	// 	TCCR1A = 0xA9;
+	// 	TCCR1B = 0x0B;
+	// 	TCNT1H = 0xFF;
+	// 	TCNT1L = 0x00;
+	// 	OCR1AH = 0x00;    //PB5  servo 4
+	// 	OCR1AL = 0xFF;
+	// 	OCR1BH = 0x00;   //PB6   servo 3
+	// 	OCR1BL = 0xFF;
+	// 	OCR1CH = 0x00;   //PB7   servo 2
+	// 	OCR1CL = 0xFF;
+
+	TCCR1A|=(1<<COM1A1)|(1<<COM1B1)|(1<<WGM11);        //NON Inverted PWM
+	TCCR1B|=(1<<WGM13)|(1<<WGM12)|(1<<CS11)|(1<<CS10); //PRESCALER=64 MODE 14(FAST PWM)
+
+	ICR1=4999;  //fPWM=50Hz (Period = 20ms Standard).
+	
+	TCCR4A|=(1<<COM4A1)|(1<<COM4B1)|(1<<WGM41);        //NON Inverted PWM//ph3>>oc4a/ph4>>oc4b
+	TCCR4B|=(1<<WGM43)|(1<<WGM42)|(1<<CS41)|(1<<CS40); //PRESCALER=64 MODE 14(FAST PWM)
+
+	ICR4=4999;  //fPWM=50Hz (Period = 20ms Standard).
+
+	
+	//stepper connections
+	DDRA=0xff;
+	PORTA =0x00;
+}
+void Wait()
+{
+	uint8_t i;
+	for(i=0;i<50;i++)
+	{
+		_delay_loop_2(0);
+		_delay_loop_2(0);
+		_delay_loop_2(0);
+	}
+
+}
+void stopm()
+{
+	PORTD =0b00000000;
+}
+void forward()
+{
+	PORTD =0b00000101;
+}
+void backward()
+{
+	PORTD =0b00001010;
+}
+void turn_right()
+{
+	PORTD =0b00001001;
+}
+void turn_left()
+{
+	PORTD =0b00000110;
+}
+void soft_right()
+{
+	PORTD =0b00000001;
+}
+void soft_left()
+{
+	PORTD =0b00000100;
+}
+void left_encoder_pin_config (void) //Configure Interrupt 4
+{
+	DDRE = DDRE & 0xEF; //Set the direction of the PORTE 4 pin as input
+	PORTE = PORTE | 0x10; //Enable internal pull-up for PORTE 4 pin
+}
+
+void right_encoder_pin_config (void) //Configure Interrupt 5
+{
+	DDRE = DDRE & 0xDF; //Set the direction of the PORTE 5 pin as input
+	PORTE = PORTE | 0x20; //Enable internal pull-up for PORTE 5 pin
+}
+void left_position_encoder_interrupt_init (void) //Interrupt 4 enable
+{
+	cli(); //Clears the global interrupt
+	EICRB = EICRB | 0x02; // INT4 is set to trigger with falling edge
+	EIMSK = EIMSK | 0x10; // Enable Interrupt INT4 for left position encoder
+	sei(); // Enables the global interrupt
+}
+void right_position_encoder_interrupt_init (void) //Interrupt 5 enable
+{
+	cli(); //Clears the global interrupt
+	EICRB = EICRB | 0x08; // INT5 is set to trigger with falling edge
+	EIMSK = EIMSK | 0x20; // Enable Interrupt INT5 for left position encoder
+	sei(); // Enables the global interrupt
+}
+ISR(INT6_vect)
+{
+	left+=1;
+}
+ISR(INT7_vect)
+{
+	right+=1;
+}
+
+void read_wls(void)
+{
+	ADCSRA=0x87;
+	ADCSRB=0x00;
+	ADMUX=0xA0;
+	ADMUX = 0xA0;
+	ADCSRA |= (1 << ADEN);  // Enable ADC
+	ADCSRA |= (1 << ADSC);  // Start A2D Conversions
+	while(ADCSRA & (1<<ADSC)){}
+	wls_left=ADCH;
+	
+	//Serial.print("A0: ");
+	//Serial.println(ADCH);
+	ADMUX = 0xA1;
+	ADCSRA |= (1 << ADEN);  // Enable ADC
+	ADCSRA |= (1 << ADSC);  // Start A2D Conversions
+	while(ADCSRA & (1<<ADSC)){}
+	wls_middle=ADCH;
+	
+	//Serial.print("A1: ");
+	//	Serial.println(ADCH);
+	ADMUX = 0xA2;
+	ADCSRA |= (1 << ADEN);  // Enable ADC
+	ADCSRA |= (1 << ADSC);  // Start A2D Conversions
+	while(ADCSRA & (1<<ADSC)){}
+	wls_right=ADCH;
+	
+	//Serial.print("A2: ");
+	//Serial.println(ADCH);
+	//      _delay_ms(100);
+}
+////////////////////////////////////PWM////////////////////////////////////////////////////////////
+
+void velocity (unsigned char left_motor, unsigned char right_motor)
+{
+	OCR5AL = (unsigned char)left_motor;
+	OCR5BL = (unsigned char)right_motor;
+}
+void servo1(int initial,int final)
+{
+	if(initial<final)
+	{
+		for(int i=initial;i<=final;i++)
+		{
+			OCR4A = i;
+			_delay_ms(10);
+		}
+	}
+	else if(final<initial)
+	{
+		for(int i=initial;i>=final;i--)
+		{
+			OCR4A = i;
+			_delay_ms(10);
+		}
+	}
+	// {
+	// 		for(int i=97;i<=260;i++)
+	// 	{
+	// 		OCR4A = i;
+	// 		_delay_ms(10);
+	// 	}
+	// 		for(int i=260;i>=97;i--)
+	//
+	// 		{
+	// 			OCR4A = i;
+	// 			_delay_ms(10);
+	// 		}
+	
+}
+void servo2(int initial,int final)
+{
+	if(initial<final)
+	{
+		for(int i=initial;i<=final;i++)
+		{
+			OCR4B = i;
+			_delay_ms(10);
+		}
+	}
+	else if(final<initial)
+	{
+		for(int i=initial;i>=final;i--)
+		{
+			OCR4B = i;
+			_delay_ms(10);
+		}
+	}
+	// {
+	// 	for(int i=50;i<=250;i++)
+	// 	{
+	// 		OCR4B = i;
+	// 		_delay_ms(20);
+	// 	}
+	// 	for(int i=250;i>=50;i--)
+	// 	{
+	// 		OCR4B = i;
+	// 		_delay_ms(20);
+	// 	}
+}
+void servo3(int initial,int final)
+{
+	if(initial<final)
+	{
+		for(int i=initial;i<=final;i++)
+		{
+			OCR1B = i;
+			_delay_ms(10);
+		}
+	}
+	else if(final<initial)
+	{
+		for(int i=initial;i>=final;i--)
+		{
+			OCR1B = i;
+			_delay_ms(10);
+		}
+	}
+	// {
+	// 	for(int i=40;i<=150;i++)
+	// 	{
+	// 		OCR1B = i;
+	// 		_delay_ms(10);
+	// 	}
+	// 		for(int i=150;i>=40;i--)
+	// 		{
+	// 			OCR1B = i;
+	// 			_delay_ms(10);
+	// 		}
+}
+void servo4(int initial,int final)
+{
+	if(initial<final)
+	{
+		for(int i=initial;i<=final;i++)
+		{
+			OCR1A = i;
+			_delay_ms(10);
+		}
+	}
+	else if(final<initial)
+	{
+		for(int i=initial;i>=final;i--)
+		{
+			OCR1A = i;
+			_delay_ms(10);
+		}
+	}
+	// 	for(int i=160;i<=250;i++)
+	// 	{
+	// 		OCR1A = i;
+	// 		_delay_ms(20);
+	// 	}
+	// 	for(int i=250;i>=160;i--)
+	// 	{
+	// 		OCR1A = i;
+	// 		_delay_ms(20);
+	// 	}
+}
+
+void stepper(int a)
+{
+	//int period;
+	DDRA = 0x0F; /* Make PORTA lower pins as output */
+	int period = 4; /* Set period in between two steps */
+	/* Rotate Stepper Motor clockwise with Half step sequence */
+	if(a==0)
+	{
+		for(int i=0;i<25;i++)
+		{
+			PORTA = 0x02;
+			_delay_ms(period);
+			
+			PORTA = 0x06;
+			_delay_ms(period);
+			
+			PORTA = 0x04;
+			_delay_ms(period);
+			
+			PORTA = 0x05;
+			_delay_ms(period);
+			
+			PORTA = 0x01;
+			_delay_ms(period);
+			
+			PORTA = 0x09;
+			_delay_ms(period);
+			
+			PORTA = 0x08;
+			_delay_ms(period);
+			
+			PORTA = 0x0A;
+			_delay_ms(3);
+			
+			
+			
+		}
+		PORTA = 0x02; /* Last step to initial position */
+		_delay_ms(period);
+		_delay_ms(100);
+	}
+	else if(a==1)
+	{
+		for(int i=0;i<25;i++)
+		{
+			PORTA = 0x08;
+			_delay_ms(period);
+			
+			PORTA = 0x09;
+			_delay_ms(period);
+			
+			PORTA = 0x01;
+			_delay_ms(period);
+			
+			PORTA = 0x05;
+			_delay_ms(period);
+			
+			PORTA = 0x04;
+			_delay_ms(period);
+			
+			PORTA = 0x06;
+			_delay_ms(period);
+			
+			PORTA = 0x02;
+			_delay_ms(period);
+			
+			PORTA = 0x0A;
+			_delay_ms(3);
+			
+			
+			
+		}
+		PORTA = 0x08; /* Last step to initial position */
+		_delay_ms(period);
+		_delay_ms(100);
+		
+	}
+	
+	/* Rotate Stepper Motor Anticlockwise with Full step sequence */
+	
+}
+//
+int main(void)
+{
+	//Serial.begin(9600);
+	all_init();
+	//INITIAL POSITIONS
+	OCR4A=350;    //SERVO1
+	//Wait();
+	OCR4B=450;    //SERVO2
+	// Wait();
+	OCR1B=316;		//SERVO3
+	OCR1A=300;		//SERVO4
+	//stepper(0);
+	travel();
+	stopm();
+	_delay_ms(2000);
+	//buzzer();
+// 	forward_wls(1,150);
+// 	velocity(100,100);
+// 	forward();
+// 	_delay_ms(600);
+// 	stopm();
+// 	pick();
+// 	turn180();
+	//servo3();
+	//servo1();
+	//left_encoder_pin_config();
+	//right_encoder_pin_config();
+	//right_position_encoder_interrupt_init();
+	//left_position_encoder_interrupt_init();
+	// middle is now left
+	// 	while(1)
+	// 	{
+	// 		//forward();
+	// 		//line_follow();
+	// 		read_wls();
+	// 		velocity(110,100);
+	//
+	// 		if(wls_right > 200)
+	// 		{
+	// 			velocity(110,120);
+	// 			soft_left();
+	// 		}
+	// 		else
+	// 		{
+	// // 			backward();
+	// // 			_delay_ms(10);
+	// // 			while()
+	// 			stopm();
+	// 		}
+	// 	}
+	return 0;
+}
+
+void travel()
+{
+	//w5 h2  w1 h4
+	//from start
+	forward_wls(1,150);
+	right_turn_wls();
+	forward_wls(1,140);
+	right_turn_wls();
+	forward_wls(1,150);
+	forward_wls(2,150);
+	velocity(100,100);
+	forward();
+	_delay_ms(600);
+	stopm();
+	pick();
+	turn180();
+	
+	forward_wls(2,150);
+	forward_wls(1,120);
+	left_turn_wls();
+	forward_wls(1,150);
+	forward_wls(1,120);
+	left_turn_wls();
+	forward_wls(2,170);
+	velocity(100,100);
+	forward();
+	_delay_ms(600);
+	stopm();
+	
+	place_lr();
+	turn180();
+	
+	forward_wls(1,150);
+	forward();
+	_delay_ms(300);
+	forward_wls(1,120);
+	/*forward_wls(1,120);*/
+	right_turn_wls();
+	forward_wls(1,150);
+	velocity(120,120);
+	forward();
+	_delay_ms(300);
+	forward_wls(1,120);
+	right_turn_wls();
+	forward_wls(1,150);
+	
+	velocity(100,100);
+	forward();
+	_delay_ms(600);
+	stopm();
+
+	pick();
+	
+	
+	turn180();
+	forward_wls(1,130);
+	left_turn_wls();
+	forward_wls(1,150);
+	forward_wls(1,120);
+	
+	left_turn_wls();
+	forward_wls(4,170);
+	velocity(100,100);
+	forward();
+	_delay_ms(680);
+	stopm();
+	
+	place_hr();
+	
+	//buzzer();
+	
+
+	
+	
+	
+	
+	
+	
+	
+	
+	//right turn
+	// 	next_move(1);
+	// 	//move to CM w5
+	// 	forward_wls(1);
+	// 	forward_wls(3);
+	// 	pick();
+	// 	//take to H2
+	// 	forward_wls(3);
+	// 	forward_wls(2);
+	// 	forward_wls(2);
+	// 	place();
+	// 	//move to CM W1
+	// 	forward_wls(2);
+	// 	forward_wls(2);
+	// 	forward_wls(1);
+	// 	pick();
+	// 	//move to H4
+	// 	forward_wls(1);
+	// 	forward_wls(2);
+	// 	forward_wls(4);
+	// 	place();
+}
+void forward_wls(int node,int speed)
+{
+	int node_covered = 0;
+	// 	/*int time_passed = 0;*/
+	// 	int node_ten = 0;
+	read_wls();
+	while (wls_middle > 180 && wls_left > 180 && wls_right > 180)
+	{
+		velocity(120,120);
+		forward();
+		read_wls();
+	}
+	velocity(120,120);
+	forward();
+	while (1)
+	{
+		read_wls();
+		
+
+		//NODE DETECTED
+		if (wls_middle > 180 && wls_left > 180 && wls_right > 180)
+		{
+			
+			stopm();
+			_delay_ms(20);
+			node_covered++;
+			
+			//time_passed = 0;
+			if (node_covered == node)
+			{
+				break;
+			}
+			// 			velocity(100,100);
+			// 			forward();
+			// 			_delay_ms(1000);
+			
+			while (wls_middle > 180 && wls_left > 180 && wls_right > 180)
+			{
+				velocity(120, 120);
+				forward();
+				read_wls();
+			}
+			//forward();
+			stopm();
+			_delay_ms(250);
+		}
+		else if (wls_middle > 180 && (wls_left > 180 || wls_right > 180))
+		{
+			 velocity(130,130);
+			if(wls_left < 180)
+				soft_right();
+			else if (wls_right < 180)
+				soft_left();
+			else
+				stopm();
+		}
+		
+		
+		else if (wls_middle < 180 && (wls_left > 180 || wls_right> 180))
+		{
+			/*stopm();*/
+			
+			velocity(120,120);
+			if(wls_left > 180)
+			{
+				soft_left();
+				_delay_ms(50);
+			}
+			else if(wls_right > 180)
+			{
+				soft_right();
+				_delay_ms(50);
+			}
+		}
+		else
+		{
+			velocity(speed,speed);
+			forward();
+		}
+		
+		
+
+	}
+}
+void left_turn_wls(void)
+{
+	
+	
+	velocity(120,120);
+	forward();
+	_delay_ms(200);
+	soft_left();
+	_delay_ms(250);
+	read_wls();
+	while (wls_middle < 180)
+	{
+		velocity(110,110);
+		soft_left();
+
+		read_wls();
+
+	}
+	//printf("right turn hogy\n");
+	stopm();
+}
+void right_turn_wls(void)
+{
+	
+	velocity(140,140);
+	forward();
+	_delay_ms(200);
+	soft_right();
+	_delay_ms(250);
+	read_wls();
+	while (wls_middle < 180)
+	{
+		velocity(115,115);
+		soft_right();
+
+		read_wls();
+
+	}
+	//printf("right turn hogy\n");
+	stopm();
+	//_delay_ms(200);
+}
+void pick()
+{
+	read_wls();
+	while(wls_middle<200)
+	{
+		if(wls_left>200 && wls_middle<200)
+			turn_left();
+		else if(wls_right>200 && wls_middle<200)
+			turn_right();
+		else if(wls_left>200)
+			turn_left();
+		else if(wls_right>200)
+			turn_right();
+		else
+			break;
+		_delay_ms(30);
+		read_wls();
+	}
+	stopm();
+	servo2(450,355);
+	servo1(350,110);
+	servo2(355,270);
+	servo4(300,150);
+	
+	servo1(110,350);
+	servo2(270,355);
+	servo2(355,450);
+}
+void place()
+{
+	velocity(150,150);
+	forward();
+	_delay_ms(500);
+	stopm();
+	
+}
+void place_lr()
+{
+	servo2(450,326);
+	servo1(350,206);
+	servo4(150,300);
+	servo1(206,350);
+	servo2(326,355);
+	servo2(355,450);
+	
+}
+void place_hr()
+{
+	servo2(450,300);
+	servo1(350,290);
+	servo4(150,300);
+	//servo1(290,350);
+	buzzer();
+	//servo2(300,355);
+	//servo2(355,450);
+	
+}
+void turn180()
+{
+	velocity(120,120);
+	turn_right();
+	_delay_ms(1500);
+	stopm();
+	read_wls();
+	while(wls_middle<180)
+	{
+		velocity(100,100);
+		turn_right();
+		read_wls();
+	}
+	stopm();
+}
+void buzzer()
+{
+	DDRD=0xF0;
+	for(int i=0;i<25500;i++)
+	{
+		PORTD=0b10000000;
+		_delay_us(100);
+		PORTD=0b00000000;
+		_delay_us(100);
+	}
+	DDRD=0x00;
+	
+}
