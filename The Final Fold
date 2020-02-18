@@ -85,7 +85,7 @@ void servo3(int initial,int final);
 void servo4(int initial,int final);
 void velocity (unsigned char left_motor, unsigned char right_motor);
 void read_wls(void);
-void stopm();
+void stopmm();
 void forward();
 void backward();
 void turn_right();
@@ -101,6 +101,8 @@ void papom(int dir, int pick, int place);
 void stepper(int rot, int deg);
 void wall_follower();
 void ir();
+void forward_wls_zz(int node,int speed);
+void line_follower();
 
 ///////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -391,7 +393,7 @@ void dijkstra(int G[MAX][MAX],int n,int startnode,int lastnode)
 		//printf("\nPath=%d",i);
 		
 		j=i;
-		int count1=0;
+		count1=0;
 		// 			int c[20];
 		// 			int l=0;
 		do
@@ -512,7 +514,11 @@ void travel(int p1, int p2)
 		//printf("wall follow \n");
 		wall_follower();
 	}
-	else if ( p1 == 9 && (p2 == 8 || p2 == 10))
+	else if((p1 == 12 && p2 == 6) || (p1 == 6 && p2 == 12))
+	{
+		forward_wls_zz(1,150);
+	}
+	else if (( p1 == 8 && p2 == 9)||( p1 == 9 && p2 == 10)|| (p1 == 10 && p2 == 9)|| (p1 == 9 && p2 == 8))
 	{
 		//printf("whiteline follow\n");
 		follow_white_line(1,150);
@@ -533,28 +539,27 @@ void travel(int p1, int p2)
 
 
 }
-
-
 void follow_white_line(int node,int speed)
 {
 	int i=0,node_covered=0;
 	read_wls();
+	_delay_ms(100);
 
-	if(wls_middle>150 && wls_left>150)
+	if(wls_middle>130 && wls_left>130)
 	{
 		velocity(130,130);
 		
-		while(wls_middle>170)
+		while(wls_middle>130)
 		{
 			soft_left();
 			read_wls();
 		}
 	}
-	else if(wls_middle>150 && wls_right>150)
+	else if(wls_middle>130 && wls_right>130)
 	{
 		velocity(110,110);
 		soft_right();
-		while(wls_middle>170)
+		while(wls_middle>130)
 		{
 			soft_right();
 			read_wls();
@@ -580,13 +585,13 @@ void follow_white_line(int node,int speed)
 			velocity(150,133);
 			backward();
 			_delay_ms(30);
-			stopm();
+			stopmm();
 			_delay_ms(20);
 			wls_print();
 			_delay_ms(1000);
 			LCD_Clear();
 			
-			if(wls_middle>50 && wls_right <50 && wls_left<50)
+			if(wls_middle>70 && wls_right <70 && wls_left<70)
 			{
 				velocity(150,150);
 				forward();
@@ -595,12 +600,12 @@ void follow_white_line(int node,int speed)
 			
 			break;
 		}
-		else if (wls_left < 150 && wls_middle < 150 && wls_right > 150)
+		else if (wls_left < 170 && wls_middle < 170 && wls_right > 170)
 		{
 			velocity(120,120);
 			turn_left();
 		}
-		else if (wls_middle < 150 && wls_left > 150 && wls_right < 150)
+		else if (wls_middle < 170 && wls_left > 170 && wls_right < 170)
 		{
 			velocity(120,120);
 			turn_right();
@@ -639,6 +644,77 @@ void follow_white_line(int node,int speed)
 
 }
 
+void all_sensor_white()
+{
+	stopmm();
+	_delay_ms(100);
+	int time_passed = 0;
+	int max_time = 1;
+	int i = 0;
+	unsigned char new_state = 'l';
+	velocity(110,110);
+
+
+
+	while (wls_middle <50)
+	{
+		max_time *= 2;
+		if (new_state == 'r')
+		{
+			while ((time_passed < max_time) && wls_middle <50)
+			{
+
+				turn_left();
+				_delay_ms(100);
+				stopmm();
+				_delay_ms(15);
+				time_passed++;
+				read_wls();
+			}
+			stopmm();
+			_delay_ms(10);
+			time_passed = 0;
+			read_wls();
+			if (wls_middle >100)
+			{
+				break;
+			}
+			new_state = 'l';
+			continue;
+		}
+
+
+		if (new_state == 'l')
+		{
+			while ((time_passed < max_time) && wls_middle <50)
+			{
+				
+
+				turn_right();
+				_delay_ms(100);
+				stopmm();
+				_delay_ms(15);
+				time_passed++;
+				read_wls();
+			}
+			stopmm();
+			_delay_ms(10);
+			time_passed = 0;
+			read_wls();
+
+			if (wls_middle >100)
+			{
+				break;
+			}
+			new_state = 'r';
+
+		}
+
+	}
+
+	stopmm();
+	_delay_ms(100);
+}
 
 
 void forward_wls(int node,int speed)
@@ -659,14 +735,14 @@ void forward_wls(int node,int speed)
 		read_wls();
 		
 		
-
+		
 		//NODE DETECTED
 		if (wls_middle > 100 && wls_left > 100 && wls_right > 100)
 		{
 			velocity(150,132);
 			backward();
 			_delay_ms(30);
-			stopm();
+			stopmm();
 			_delay_ms(20);
 			node_covered++;
 			i=0;
@@ -686,7 +762,7 @@ void forward_wls(int node,int speed)
 				read_wls();
 			}
 			
-			stopm();
+			stopmm();
 			_delay_ms(250);
 		}
 		else if (wls_middle > 100 && (wls_left > 100 || wls_right > 100))
@@ -703,7 +779,185 @@ void forward_wls(int node,int speed)
 			else if (wls_right < 100)
 			turn_left();
 			_delay_ms(5);
-			stopm();
+			stopmm();
+			i++;
+			
+			
+		}
+		
+		
+		else if (wls_middle < 100 && (wls_left > 100 || wls_right> 100))
+		{
+			
+			
+			velocity(120,120);
+			if(wls_left > 100)
+			{
+				soft_left();
+				_delay_ms(50);
+			}
+			else if(wls_right > 100)
+			{
+				soft_right();
+				_delay_ms(50);
+			}
+		}
+		//else if(wls_middle > 150 && wls_left < 100 && wls_right > 150)
+		else
+		{
+			velocity(150,132);
+			forward();
+		}
+		
+		
+
+	}
+}
+
+void line_follower()
+{
+	int i=0,node_covered=0;
+	read_wls();
+	velocity(150,135);
+	forward();
+	while (1)
+	{
+		read_wls();
+		
+		
+		if (wls_middle < 30 && wls_left < 30 && wls_right < 30)
+		{
+			ir();
+			if(ir_left<80)
+			{
+				forward();
+				_delay_ms(10);
+				continue;
+			}
+				
+			velocity(150,132);
+			stopmm();
+			soft_left();
+			_delay_ms(300);
+			break;
+		}
+		else if (wls_middle > 100 && (wls_left > 100 || wls_right > 100))
+		{
+			velocity(120,120);
+			if(i==3)
+			{
+				backward();
+				_delay_ms(15);
+			}
+			
+			if(wls_left < 100)
+			turn_right();
+			else if (wls_right < 100)
+			turn_left();
+			_delay_ms(5);
+			stopmm();
+			i++;
+			
+			
+		}
+		
+		
+		else if (wls_middle < 100 && (wls_left > 100 || wls_right> 100))
+		{
+			
+			
+			velocity(120,120);
+			if(wls_left > 100)
+			{
+				soft_left();
+				_delay_ms(50);
+			}
+			else if(wls_right > 100)
+			{
+				soft_right();
+				_delay_ms(50);
+			}
+		}
+		else
+		{
+			velocity(150,132);
+			forward();
+		}
+		
+		
+
+	}
+}
+
+
+
+
+void forward_wls_zz(int node,int speed)
+{
+	int i=0,node_covered=0;
+	read_wls();
+	while (wls_middle > 100 && wls_left > 100 && wls_right > 100)
+	{
+		velocity(150,132);
+		forward();
+		read_wls();
+		
+	}
+	velocity(150,135);
+	forward();
+	while (1)
+	{
+		read_wls();
+		
+		
+		if (wls_middle < 50 && wls_left < 50 && wls_right < 50)
+		{
+			all_sensor_white();
+		}
+		//NODE DETECTED
+		else if (wls_middle > 100 && wls_left > 100 && wls_right > 100)
+		{
+			velocity(150,132);
+			backward();
+			_delay_ms(30);
+			stopmm();
+			_delay_ms(20);
+			node_covered++;
+			i=0;
+			
+			
+			if (node_covered == node)
+			{
+				break;
+			}
+			
+			
+			while (wls_middle > 100 && wls_left > 100 && wls_right > 100)
+			{
+				velocity(150, 132);
+				forward();
+				_delay_ms(30);
+				read_wls();
+			}
+			
+			stopmm();
+			_delay_ms(250);
+		}
+		else if (wls_middle > 100 && (wls_left > 100 || wls_right > 100))
+		{
+			velocity(120,120);
+			if(i==3)
+			{
+				backward();
+				_delay_ms(15);
+			}
+			
+			if(wls_left < 100)
+			turn_right();
+			else if (wls_right < 100)
+			turn_left();
+			_delay_ms(5);
+			stopmm();
 			i++;
 			
 			
@@ -748,7 +1002,7 @@ void left_turn_wls(void)
 	soft_left();
 	_delay_ms(250);
 	read_wls();
-	while (wls_middle < 100)
+	while (wls_middle < 130)
 	{
 		velocity(110,110);
 		soft_left();
@@ -756,7 +1010,7 @@ void left_turn_wls(void)
 		read_wls();
 
 	}
-	stopm();
+	stopmm();
 }
 void right_turn_wls(void)
 {
@@ -766,7 +1020,7 @@ void right_turn_wls(void)
 	soft_right();
 	_delay_ms(250);
 	read_wls();
-	while (wls_middle < 100)
+	while (wls_middle < 130)
 	{
 		velocity(115,115);
 		soft_right();
@@ -792,10 +1046,12 @@ void buzzer()
 }
 void turn_180()
 {
+	forward();
+	_delay_ms(700);
 	velocity(120,120);
 	turn_right();
 	_delay_ms(1500);
-	stopm();
+	stopmm();
 	read_wls();
 	while(wls_middle<100)
 	{
@@ -803,7 +1059,7 @@ void turn_180()
 		turn_right();
 		read_wls();
 	}
-	stopm();
+	stopmm();
 }
 
 void servo1(int initial,int final)
@@ -967,7 +1223,7 @@ void read_wls(void)
 	//      _delay_ms(100);
 }
 
-void stopm()
+void stopmm()
 {
 	PORTD =0b00000000;
 }
@@ -1014,7 +1270,7 @@ void pick_bot()
 	//_delay_ms(30);
 	//read_wls();
 	//}
-	//stopm();
+	//stopmm();
 	servo2(450,355);
 	servo1(350,110);
 	servo2(355,260);
@@ -1339,6 +1595,26 @@ void pick_from(int d, int a, int p)
 
 void papom(int dir, int pick, int place)
 {
+	velocity(120,120);
+	forward();
+	_delay_ms(800);
+	read_wls();
+	if(wls_middle<70)
+	{
+		while(wls_middle<70)
+		{
+			read_wls();
+			if(wls_left>20 && wls_right<20)
+			{
+				turn_right();
+			}
+			else if(wls_right>20 && wls_right<20)
+			{
+				turn_left();
+			}
+		}
+	}
+	stopmm();
 		int i;
 		//direction ==1, clockise        direction ==0, anticlockwise
 		//pick 1,2,3,4-on the bot, 5-outside, 6-inside
@@ -1592,21 +1868,34 @@ void stepper(int rot, int deg)
 
 void wall_follower()
 {
+	line_follower();
 	velocity(120,120);
 	ir();
-	if(ir_left<95)
+	while(ir_left>75)
 	{
-		soft_left();
+		
+		ir();
+		read_wls();
+		if(wls_left>100 || wls_middle>100 || wls_right>100)
+		{
+			break;
+		}
+		if(ir_left<90)
+		{
+			soft_left();
+		}
+		else if(ir_left>95)
+		{
+			soft_right();
+		}
+		else
+		{
+			forward();
+		}
+		_delay_ms(100);
 	}
-	else if(ir_left>100)
-	{
-		soft_right();
-	}
-	else
-	{
-		forward();
-	}
-	_delay_ms(100);
+	
+	forward_wls(1,150);
 }
 
 void ir()
@@ -1623,14 +1912,42 @@ void ir()
 	ir_left=ADCH;
 }
 
+
 int main(void)
 {
-	all_init();
+		
+	f=0;
+	direction = anclk;	
+ 	all_init();
+// 	 while (1)
+// 	 {
+// 		 wls_print();
+// 		 _delay_ms(1000);
+// 		 LCD_Clear();
+// 	 }
+// 
 	velocity(150,150);
-	//travel(10,9);
-	//forward_wls(1,120);
-	shortest_path(3,5);
+	_delay_ms(1000);
 	
+// 	travel(11,12);
+// 		travel(12,6);
+	//forward_wls(1,120);
+
+	shortest_path(1,3);
+	papom(direction,5,1);
+	papom(direction,6,3);
+	shortest_path(3,4);
+	papom(direction,1,5);
+	papom(direction,3,5);
+	
+	//shortest_path(12,6);
+//left_turn_wls();
+//forward_wls(1,150);
+// 	 wls_print();
+// 	 _delay_ms(5000);
+// 	 LCD_Clear();
+// 	follow_white_line(1,150);
+	stopmm();      //after everything
 	
 	return 0;
 }
