@@ -1599,20 +1599,20 @@ void papom(int dir, int pick, int place)
 	forward();
 	_delay_ms(800);
 	read_wls();
-	if(wls_middle<70)
+	while(wls_middle<100)
 	{
-		while(wls_middle<70)
-		{
-			read_wls();
-			if(wls_left>20 && wls_right<20)
-			{
-				turn_right();
-			}
-			else if(wls_right>20 && wls_right<20)
-			{
-				turn_left();
-			}
-		}
+	if(wls_left>100 && wls_middle<100)
+	turn_left();
+	else if(wls_right>100 && wls_middle<100)
+	turn_right();
+	else if(wls_left>100)
+	turn_left();
+	else if(wls_right>100)
+	turn_right();
+	else
+	break;
+	_delay_ms(30);
+	read_wls();
 	}
 	stopmm();
 		int i;
