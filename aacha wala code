@@ -1,0 +1,681 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <avr/eeprom.h>
+ /*#include<stdbool.h>*/
+ #define  F_CPU 14745600
+ #define stepc 1
+ #define stepac 0
+ #define clk 1
+ #define anclk 0
+ #define byte uint8_t
+ #include <avr/io.h>
+ #include <avr/interrupt.h>
+ #include <util/delay.h>
+ #define FALSE 0
+ #define TRUE 1
+
+ typedef int bool;
+
+
+ int availableMemory() {
+	 int size = 8192;
+	 byte *buf;
+
+	 while ((buf = (byte *) malloc(--size)) == NULL);
+
+	 free(buf);
+
+	 return size;
+ }
+
+
+ //LCD definition......................................///////////////////////////////////////
+ #define LCD_Data_Dir DDRK		/* Define LCD data port direction */
+ #define LCD_Command_Dir DDRC		/* Define LCD command port direction register */
+ #define LCD_Data_Port PORTK		/* Define LCD data port */
+ #define LCD_Command_Port PORTC		/* Define LCD data port */
+ #define RS PC0				/* Define Register Select (data/command reg.)pin */
+ #define RW PC1				/* Define Read/Write signal pin */
+ #define EN PC2				/* Define Enable signal pin */
+ ///////////////////////////////////////////////////////////////////////////////////////////////
+
+
+ //LCD functions ..................................///////////////////////////////////////////////////////////////////////////////////
+
+ int wls_left,wls_right,wls_middle;
+
+ void LCD_Command(unsigned char cmnd)
+ {
+	 LCD_Data_Port= cmnd;
+	 LCD_Command_Port &= ~(1<<RS);	/* RS=0 command reg. */
+	 LCD_Command_Port &= ~(1<<RW);	/* RW=0 Write operation */
+	 LCD_Command_Port |= (1<<EN);	/* Enable pulse */
+	 _delay_us(1);
+	 LCD_Command_Port &= ~(1<<EN);
+	 _delay_ms(3);
+ }
+
+ void LCD_Char (unsigned char char_data)	/* LCD data write function */
+ {
+	 LCD_Data_Port= char_data;
+	 LCD_Command_Port |= (1<<RS);	/* RS=1 Data reg. */
+	 LCD_Command_Port &= ~(1<<RW);	/* RW=0 write operation */
+	 LCD_Command_Port |= (1<<EN);	/* Enable Pulse */
+	 _delay_us(1);
+	 LCD_Command_Port &= ~(1<<EN);
+	 _delay_ms(1);
+ }
+
+ void LCD_Init (void)			/* LCD Initialize function */
+ {
+	 LCD_Command_Dir = 0xFF;		/* Make LCD command port direction as o/p */
+	 LCD_Data_Dir = 0xFF;		/* Make LCD data port direction as o/p */
+	 _delay_ms(20);			/* LCD Power ON delay always >15ms */
+	 
+	 LCD_Command (0x38);		/* Initialization of 16X2 LCD in 8bit mode */
+	 LCD_Command (0x0C);		/* Display ON Cursor OFF */
+	 LCD_Command (0x06);		/* Auto Increment cursor */
+	 LCD_Command (0x01);		/* Clear display */
+	 LCD_Command (0x80);		/* Cursor at home position */
+ }
+
+ void LCD_String (char *str)		/* Send string to LCD function */
+ {
+	 int i;
+	 for(i=0;str[i]!=0;i++)		/* Send each char of string till the NULL */
+	 {
+		 LCD_Char (str[i]);
+	 }
+ }
+
+ void LCD_String_xy (char row, char pos, char *str)/* Send string to LCD with xy position */
+ {
+	 if (row == 0 && pos<16)
+	 LCD_Command((pos & 0x0F)|0x80);	/* Command of first row and required position<16 */
+	 else if (row == 1 && pos<16)
+	 LCD_Command((pos & 0x0F)|0xC0);	/* Command of first row and required position<16 */
+	 LCD_String(str);		/* Call LCD string function */
+ }
+
+ void LCD_Clear()
+ {
+	 LCD_Command (0x01);		/* clear display */
+	 LCD_Command (0x80);		/* cursor at home position */
+ }
+
+
+ void wls_print()
+ {
+	 unsigned char c[5];
+	 read_wls();
+	 itoa(wls_left, c, 10);
+	 LCD_String(c);
+	 
+	 itoa(wls_middle, c, 10);
+	 LCD_String_xy(0,5,c);
+	 
+	 itoa(wls_right, c, 10);
+	 LCD_String_xy(1,0,c);
+	 _delay_ms(10);
+ }
+ ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+
+
+ void all_init()
+ {
+	 
+	 LCD_Init();
+ }
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+//                             ALGO PART
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+ int or_path[12];
+ int dup_path[12];
+ 
+ 
+ int mat_picked[]={2,2};
+  int Dist[12][12]={  {0, 5, 2, 5, 4, 7, 1, 4, 3, 6, 7,  3},//1
+  {5, 0, 5, 2, 7, 4, 4, 1, 6, 3, 7,  3},//2
+  {2, 5, 0, 5, 2, 7, 1, 4, 1, 6, 5,  5},//3
+  {5, 2, 5, 0, 7, 2, 4, 1, 6, 1, 5,  5},//4
+  {4, 7, 2, 7, 0, 6, 3, 6, 1, 6, 3,  7},//5
+  {7, 4, 7, 2, 6, 0, 6, 3, 6, 1, 3,  7},//6
+  {1, 4, 1, 4, 3, 6, 0, 3, 2, 7, 6,  4},//h1 7
+  {4, 1, 4, 1, 6, 3, 3, 0, 7, 2, 6,  4},//h2 8
+  {3, 6, 1, 6, 1, 6, 2, 7, 0, 5, 4,  6},//h3 9
+  {6, 3, 6, 1, 6, 1, 7, 2, 5, 0, 4,  6},//h4 10
+  {7, 7, 5, 5, 3, 3, 6, 6, 4, 4, 0, 10},//h5 11
+  {3, 3, 5, 5, 7, 7, 4, 4, 6, 6, 10, 0},//start
+  };
+ 
+ int house[]={5,1,2,3,4};
+ int CM[] = {2,6,5,3,2,3,1,4,1,4};
+ struct available_mat
+ {
+	 int mat;
+	 struct available_mat *next;
+ };
+
+
+ int calculate_dist(int mat1,int mat2,int prev_H,int now_H)
+ {
+	 if(Dist[prev_H+5][mat1-1]<Dist[prev_H+5][mat2-1])
+	 return Dist[prev_H+5][mat1-1]+Dist[mat1-1][mat2-1]+Dist[mat2-1][now_H+5];
+	 else
+	 return Dist[mat2-1][prev_H+5]+Dist[mat1-1][mat2-1]+Dist[now_H+5][mat1-1];
+	 
+ }
+
+
+ void decide_which_mat_take(struct available_mat* prev,struct available_mat* now,int bot_mat[],int H, int *b)
+ {
+	 int a=2;
+	 
+	 
+	 struct available_mat *p,*q,*s1,*s2,*temp;
+	 
+	 bool CM1=TRUE;
+	 bool CM2=TRUE;
+	 s1=now;
+	 s2=prev;
+	 int mat_for_house_H[] = {CM[2*H-1],CM[2*H-2]};
+	 
+	 unsigned char c[10];
+	
+	 //check bot_mat with mat req for given house
+	 if(bot_mat[0]==mat_for_house_H[0] && CM1)
+	 {
+		 
+		 CM1=FALSE;
+		 a--;
+	 }
+	 else if(bot_mat[0]==mat_for_house_H[1] && CM2)
+	 {
+		 
+		 CM2=FALSE;
+		 a--;
+	 }
+	 if(bot_mat[1]==mat_for_house_H[0] && CM1)
+	 {
+		 
+		 CM1=FALSE;
+		 a--;
+	 }
+	 else if(bot_mat[1]==mat_for_house_H[1] && CM2)
+	 {
+		
+		 CM2=FALSE;
+		 a--;
+	 }
+	 if(!CM1 && a==1)
+	 {
+		 q=malloc(sizeof(struct available_mat));
+		 now->mat=mat_for_house_H[1];
+		
+		 now->next=q;
+		 now=q;
+	 }
+	 else if(!CM2 && a==1)
+	 {
+		 q=malloc(sizeof(struct available_mat));
+		 now->mat=mat_for_house_H[0];
+		
+		 now->next=q;
+		 now=q;
+	 }
+	 bool ismat1=FALSE;
+	 bool ismat2=FALSE;
+	 bool for_H=FALSE;
+	 *b=a;
+	 int i=0;
+	 while(prev!=NULL)
+	 {
+		 
+		 //if mat in bot is mat req for house
+		 if(a==0)
+		 
+		 {
+			 
+			 if((prev->mat!=mat_picked[0] || ismat1) && (prev->mat!=mat_picked[1] || ismat2) )
+			 {
+				 q=malloc(sizeof(struct available_mat));
+				 now->mat=prev->mat;
+				 
+				
+				 now->next=q;
+				 temp=now;
+				 now=q;
+			 }
+			 else
+			 {
+				 if(prev->mat==mat_picked[0])
+				 ismat1=TRUE;
+				 else if(prev->mat==mat_picked[1])
+				 ismat2=TRUE;
+			 }
+			 
+			 prev=prev->next;
+		 }
+		 
+		 else if(a==1)
+		 {
+			 if(!CM1)
+			 {
+				 
+				 if(((prev->mat!=mat_picked[0] || ismat1) && (prev->mat!=mat_picked[1] || ismat2) )&& (prev->mat!=mat_for_house_H[1] || for_H) )
+				 {
+					 q=malloc(sizeof(struct available_mat));
+					 now->mat=prev->mat;
+					
+					 now->next=q;
+					 temp=now;
+					 now=q;
+				 }
+				 else
+				 {
+					 if(prev->mat==mat_picked[0])
+					 ismat1=TRUE;
+					 else if(prev->mat==mat_picked[1])
+					 ismat2=TRUE;
+					 else if(prev->mat==mat_for_house_H[1])
+					 for_H=TRUE;
+				 }
+				 
+				 prev=prev->next;
+				 
+			 }
+			 else if(!CM2)
+			 {
+				 
+				 if(((prev->mat!=mat_picked[0] || ismat1) && (prev->mat!=mat_picked[1] || ismat2) )&& (prev->mat!=mat_for_house_H[0] || for_H))
+				 {
+					 q=malloc(sizeof(struct available_mat));
+					 now->mat=prev->mat;
+					
+					 now->next=q;
+					 temp=now;
+					 now=q;
+				 }
+				 else
+				 {
+					 if(prev->mat==mat_picked[0])
+					 ismat1=TRUE;
+					 else if(prev->mat==mat_picked[1])
+					 ismat2=TRUE;
+					 else if(prev->mat==mat_for_house_H[0])
+					 for_H=TRUE;
+				 }
+				 
+				 prev=prev->next;
+			 }
+		 }
+		 //mat req for house is not in bot hence take those material only
+		 else if(a==2)
+		 {
+			 unsigned char c[10];
+			
+			 prev=NULL;
+			 q=malloc(sizeof(struct available_mat));
+			 
+		
+			 now->mat=mat_for_house_H[0];
+			
+			 now->next=q;
+			 now=q;
+			 now->mat=mat_for_house_H[1];
+		
+			 
+		 }
+	 }
+	 if(a!=2)
+	 {
+	   now=temp;
+	   free(q);
+	 }
+	 now->next=NULL;
+	 now=s1;
+	 prev=s2;
+	 
+	
+ }
+
+
+ void swap(int *x, int *y)
+ {
+	 int temp;
+	 temp = *x;
+	 *x = *y;
+	 *y = temp;
+ }
+
+
+ int max_distance= 99;
+
+ ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+//                              CM_pick_order
+ ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+ void CM_pick_order(int step,int comb_of_HOUSE[5],struct available_mat* prev,int mat_in_bot[],int distance_upto_now)
+ {
+
+	 step++;
+	 if(step==4)
+	 {
+
+		 int distance=distance_upto_now+Dist[comb_of_HOUSE[step-1]+6][comb_of_HOUSE[step]+6];
+		 
+		 if(distance<max_distance)
+		 {
+			 for(int i=0;i<9;i++)
+			 {
+				 or_path[i]=dup_path[i];
+				 
+			 }
+			 
+			 max_distance=distance;
+			 or_path[3*(step-1)]=mat_in_bot[1];
+			 or_path[3*(step-1)+1]=mat_in_bot[0];
+			 or_path[3*(step-1)+2]=comb_of_HOUSE[step]+6;
+			 
+			 return 0;
+		 }
+	 }
+	 else if(step!=4)
+	 {
+		 
+		 
+// 		 int new_mat_in_bot[2];
+// 		 new_mat_in_bot[0]=mat_in_bot[0];
+// 		 new_mat_in_bot[1]=mat_in_bot[1];
+		 int prev_m1=mat_picked[0];
+		 int prev_m2=mat_picked[1];
+		 
+		 struct available_mat *now,*dup_now,*availmat,*dup_availmat,*head,*comb1,*comb2,*q,*for_availmat,*for_prev,*for_c1,*for_c2;
+		 int a;
+		 now = malloc(sizeof(struct available_mat));
+		 dup_now=now;
+		 availmat=malloc(sizeof(struct available_mat));
+		 dup_availmat=availmat;
+		 
+		 //see available combination of available_materials
+		 decide_which_mat_take(prev, now, mat_in_bot, comb_of_HOUSE[step], &a);
+		 
+		 //this will be used for generating combination of materials
+		 comb1=now;
+		 comb2=now->next;
+		 
+		 //now combination of available materials
+		 
+		 head=availmat;
+		 for_prev=prev;
+		 bool ismat1=FALSE;
+		 bool ismat2=FALSE;
+		 bool CM1=FALSE;
+		 bool CM2=FALSE;
+		 bool isQ=FALSE;
+		 for_availmat=availmat;
+		 while(prev!=NULL)
+		 {
+			 //making list for next available material
+			 if((prev->mat!=mat_picked[0] || ismat1) && (prev->mat!=mat_picked[1] || ismat2)  )
+			 {
+				 isQ=TRUE;
+				 q=malloc(sizeof(struct available_mat));
+				 availmat->mat=prev->mat;
+				 for_availmat=availmat;
+				 
+				 availmat->next=q;
+				 availmat=q;
+			 }
+			 else
+			 {
+				 if(prev->mat==mat_picked[0])
+				 ismat1=TRUE;
+				 else if(prev->mat=mat_picked[1])
+				 ismat2=TRUE;
+			 }
+			 
+			 prev=prev->next;
+		 }
+ 		 if(isQ)
+ 		 free(q);
+		
+		 availmat=for_availmat;
+		 
+		 availmat->next=NULL;
+		 availmat=head;
+		 prev=for_prev;
+		 
+		 int distance;
+		 //begin the combination of available_materials
+		 
+		 if(a==0)
+		 {
+			 while(comb1->next!=NULL)
+			 {
+				 while(comb2!=NULL)
+				 {
+					 
+					 distance=distance_upto_now+calculate_dist(comb2->mat,comb1->mat,comb_of_HOUSE[step-1],comb_of_HOUSE[step]);
+					 if(distance<max_distance)
+					 {
+						 
+						 mat_in_bot[0]=comb2->mat;
+						 mat_in_bot[1]=comb1->mat;
+						 
+						 dup_path[3*(step-1)]=comb1->mat;
+						 dup_path[3*(step-1)+1]=comb2->mat;
+						 dup_path[3*(step-1)+2]=comb_of_HOUSE[step]+6;
+						 int M1=mat_picked[0];
+						 int M2=mat_picked[1];
+						 mat_picked[0]=comb1->mat;
+						 mat_picked[1]=comb2->mat;
+						 
+						 CM_pick_order(step, comb_of_HOUSE, availmat, mat_in_bot, distance);
+						 
+						 mat_picked[0]=M1;
+						 mat_picked[1]=M2;
+						 
+						 
+					 }
+					 
+					 comb2=comb2->next;
+				 }
+				 
+				 comb1=comb1->next;
+				 comb2=comb1->next;
+			 }
+		 }
+		 else if(a==1)
+		 {
+			 
+			 while(comb2!=NULL)
+			 {
+				 
+				 distance=distance_upto_now+calculate_dist(comb2->mat,comb1->mat,comb_of_HOUSE[step-1],comb_of_HOUSE[step]);
+				 
+				 if(distance<max_distance)
+				 {
+					 for(int i=0;i<2;i++)
+					 {
+						 if(mat_in_bot[i]==CM[2*comb_of_HOUSE[step]-1] ||  mat_in_bot[i]==CM[2*comb_of_HOUSE[step]-2] )
+						 {
+							 
+							 mat_in_bot[i]=comb2->mat;
+							 break;
+						 }
+					 }
+					 
+					 dup_path[3*(step-1)]=comb1->mat;
+					 dup_path[3*(step-1)+1]=comb2->mat;
+					 dup_path[3*(step-1)+2]=comb_of_HOUSE[step]+6;
+					 int M1=mat_picked[0];
+					 int M2=mat_picked[1];
+					 mat_picked[0]=comb1->mat;
+					 mat_picked[1]=comb2->mat;
+					 
+					 CM_pick_order(step, comb_of_HOUSE, availmat, mat_in_bot, distance);
+					 
+// 					 new_mat_in_bot[0]=mat_in_bot[0];
+// 					 new_mat_in_bot[1]=mat_in_bot[1];
+					 mat_picked[0]=M1;
+					 mat_picked[1]=M2;
+					 
+				 }
+				 comb2=comb2->next;
+			 }
+			 //free(comb1);
+			 
+		 }
+		 else if(a==2)
+		 {
+			 
+			 
+			 distance=distance_upto_now+calculate_dist(comb2->mat,comb1->mat,comb_of_HOUSE[step-1],comb_of_HOUSE[step]);
+			 
+			 if(distance<max_distance)
+			 {
+				 
+				 
+				 dup_path[3*(step-1)]=comb1->mat;
+				 dup_path[3*(step-1)+1]=comb2->mat;
+				 
+				 dup_path[3*(step-1)+2]=comb_of_HOUSE[step]+6;
+				 
+				 int M1=mat_picked[0];
+				 int M2=mat_picked[1];
+				 mat_picked[0]=comb1->mat;
+				 mat_picked[1]=comb2->mat;
+				 
+				 CM_pick_order(step, comb_of_HOUSE, availmat, mat_in_bot, distance);
+				 mat_picked[0]=M1;
+				 mat_picked[1]=M2;
+				 
+			 }
+		 }
+		 
+		 delete_list(dup_now);
+		 delete_list(dup_availmat);
+		 
+		// free(&a);
+		 mat_picked[0]=prev_m1;
+		 mat_picked[1]=prev_m2;
+		 //free(comb1);
+		 //free(comb2);
+	 }
+	
+	 
+ }
+
+ void delete_list(struct available_mat *head)
+ {
+	 struct available_mat *temp;
+	 while(head->next!=NULL)
+	 {
+		 temp=head;
+		 head=head->next;
+		 free(temp);
+	 }
+	 free(head);
+ }
+
+ void permute(int *a, int l, int r,struct available_mat* prev)   // (*f)(int ,int ,int ,int ,int) https://medium.com/@jraleman/c-programming-language-passing-a-function-as-a-parameter-90d52fe842ea
+ {
+	 int i;
+	 if (l == r)
+	 {
+
+		 
+		 int bot_mat[] = {2,3};
+		 int distance=0;
+		 int step = 0;
+
+		 
+		 mat_picked[0]=bot_mat[0];
+		 mat_picked[1]=bot_mat[1];
+		 CM_pick_order(step,house,prev,bot_mat,distance);
+		 
+		 
+	 }
+
+	 else
+	 {
+		 for (i = l; i <= r; i++)
+		 {
+			 swap((a+l), (a+i));
+			 permute(a, l+1, r,prev);
+			 swap((a+l), (a+i)); //backtrack
+		 }
+	 }
+ }
+ void make_path()
+ {
+	 struct available_mat *head,*p,*prev,*q;
+	 // copying CM from array to linked list
+	 head=malloc(sizeof(struct available_mat));
+	 head->mat=CM[0];
+	 head->next=NULL;
+	 p=head;
+	 prev=head;
+	 for(int i=1;i<8;i++)
+	 {
+		 q=malloc(sizeof(struct available_mat));
+		 p->next=q;
+		 q->mat=CM[i];
+		 
+		 if(i<8)
+		 p=q;
+		 else
+		 p->next=NULL;
+	 }
+	 
+	 permute(house, 1, 4,prev);
+	 delete_list(head);
+	 
+	 
+	 
+ }
+ /////////////////////////////////////////////////////////////////////
+ //////////////////////////////////////////////////////////////////////////////
+ /* Driver program to test above functions */
+ int main()
+ {
+	 LCD_Init();
+	
+	 unsigned char c[10];
+	 int size = availableMemory();
+	 LCD_Clear();
+
+	 itoa(size, c, 10);
+	 LCD_String(c);
+	 LCD_String_xy(1,1,"PHLE");
+	 _delay_ms(1000);
+	 LCD_Clear();
+
+	 make_path();
+	 LCD_Clear();
+	 for(int i=0;i<12;i++)
+	 {
+		 
+		 
+		 itoa(or_path[i], c, 10);
+		 LCD_String(c);
+		 
+		 LCD_String_xy(0,i,c);
+		 _delay_ms(1000);
+	 }
+	 //free(or_path);
+	 size = availableMemory();
+	 LCD_Clear();
+	 
+	 
+	 itoa(size, c, 10);
+	 LCD_String(c);
+	 LCD_String_xy(1,1,"akhir");
+	 _delay_ms(1000);
+	 
+	 return 0;
+ }
