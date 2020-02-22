@@ -43,12 +43,24 @@ struct available_mat
 
 int calculate_dist(int mat1,int mat2,int prev_H,int now_H)
 {
-    if(Dist[prev_H+5][mat1-1]<Dist[prev_H+5][mat2-1])
-        return Dist[prev_H+5][mat1-1]+Dist[mat1-1][mat2-1]+Dist[mat2-1][now_H+5];
+    if(mat1==0 || mat2==0)
+    {
+        if(mat1==0 && mat2!=0)
+            return Dist[prev_H+5][mat2-1]+Dist[mat2-1][now_H+5];
+        else if(mat2==0 && mat1!=0)
+            return Dist[prev_H+5][mat1-1]+Dist[mat1-1][now_H+5];
+        else
+            return 55;
+    }
     else
-        return Dist[prev_H+5][mat2-1]+Dist[mat2-1][mat1-1]+Dist[mat1-1][now_H+5];
-    
+    {
+        if(Dist[prev_H+5][mat1-1]<Dist[prev_H+5][mat2-1])
+            return Dist[prev_H+5][mat1-1]+Dist[mat1-1][mat2-1]+Dist[mat2-1][now_H+5];
+        else
+            return Dist[prev_H+5][mat2-1]+Dist[mat2-1][mat1-1]+Dist[mat1-1][now_H+5];
+    }
 }
+
 
 
 void decide_which_mat_take(struct available_mat* prev,struct available_mat* now,int bot_mat[],int H, int *b)
