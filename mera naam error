@@ -1095,107 +1095,216 @@ void travel(int p1, int p2)
 
 
 }
-void follow_white_line(int node,int speed)
+bool isWhite_node()
 {
-	int i=0,node_covered=0;
-	read_wls();
-	_delay_ms(100);
-
-	if(wls_middle>130 && wls_left>130)
+	while(1)
 	{
-		velocity(130,130);
-		
-		while(wls_middle>130)
-		{
-			soft_left();
-			read_wls();
-		}
-	}
-	else if(wls_middle>130 && wls_right>130)
-	{
-		velocity(110,110);
-		soft_right();
-		while(wls_middle>130)
-		{
-			soft_right();
-			read_wls();
-		}
+		read_wls();
+		if(wls_left>100 && wls_middle<100 && wls_right>100)
+			turn_right();
+		else if(wls_left<100 && wls_middle<100 && wls_right<100)
+			turn_left();
+		else if(wls_left<100 && wls_middle<100 && wls_right<100)
+			return TRUE;
+		else
+			return FALSE;
 	}
 	
-	while (wls_middle < 190 && wls_left < 190 && wls_right < 190)
+}
+void follow_white_line(int node,int speed,int point)
+{
+	if(point==9)
 	{
-		velocity(150,132);
-		forward();
-		read_wls();
-		
-	}
-	velocity(150,135);
-	forward();
-
-	while (1)
-	{
-		read_wls();
-		
-		if (wls_middle < 170 && wls_left < 170 && wls_right < 170)
+// 		read_wls();
+// 		
+// 		//in white node
+// 		while (wls_middle < 100 && (wls_left < 100 || wls_right < 100))
+// 		{
+// 			velocity(150,132);
+// 			forward();
+// 			read_wls();
+// 			
+// 			
+// 		}
+// 		velocity(150,135);
+// 		forward();
+		while (1)
 		{
-			velocity(150,133);
-			backward();
-			_delay_ms(30);
-			stopmm();
-			_delay_ms(20);
-			wls_print();
-			_delay_ms(1000);
-			LCD_Clear();
+			read_wls();
 			
-			if(wls_middle>70 && wls_right <70 && wls_left<70)
+			
+			
+			//NODE DETECTED
+			//all white
+			if (wls_middle < 150 && wls_left < 150 && wls_right < 150)
 			{
-				velocity(150,150);
-				forward();
-				forward_wls(1,150);
+				all_sensor_white();
+				read_wls();
+				
+					forward_wls(1,250);
+					break;
+				
+				
 			}
 			
-			break;
-		}
-		else if (wls_left < 170 && wls_middle < 170 && wls_right > 170)
-		{
-			velocity(120,120);
-			turn_left();
-		}
-		else if (wls_middle < 170 && wls_left > 170 && wls_right < 170)
-		{
-			velocity(120,120);
-			turn_right();
-		}
-		
-		
-		else if (wls_left > 170 && wls_middle > 170 && wls_right < 170)
-		{
+			else if (wls_middle < 150 && (wls_left < 150 || wls_right < 150))
+			{
+				velocity(120,120);
+				
+				
+				if(wls_left < 150)
+				turn_left();
+				else if (wls_right < 150)
+				turn_right();
+				_delay_ms(5);
+				stopmm();
+				
+				
+				
+			}
 			
 			
-			velocity(120,120);
-			soft_right();
-			_delay_ms(50);
+			else if (wls_middle > 150 && (wls_left < 150 || wls_right< 150))
+			{
+				velocity(120,120);
+				if(wls_middle>150 && wls_left<150 && wls_right<150)
+				{
+				  forward_wls(1,250);
+				  break;
+				}
+				
+				else if(wls_left < 150)
+				{
+					soft_left();
+					_delay_ms(25);
+				}
+				else if(wls_right < 150)
+				{
+					soft_right();
+					_delay_ms(25);
+				}
+			}
+			//else if(wls_middle > 150 && wls_left < 100 && wls_right > 150)
+// 			else if(wls_middle>150 && wls_left>150 && wls_right>150)
+// 			{
+// 			    forward_wls(1,250);
+// 				break;
+// 			}
+			else
+			{
+				velocity(150,132);
+				forward();
+			}
 			
-		}
-		else if (wls_left < 170 && wls_middle > 170 && wls_right > 170)
-		{
 			
-			
-			velocity(120,120);
-			soft_left();
-			_delay_ms(50);
-			
-		}
-		
-		
-		else
-		{
-			velocity(150,132);
-			forward();
-		}
-		
-		
 
+		}
+		wls_print();
+		_delay_ms(5000);
+	}
+	
+	
+	
+	
+	//if point is 8 or 10
+	
+	else
+	{
+		
+		stopmm();
+		read_wls();
+		wls_print();
+		_delay_ms(1000);
+		stopmm();
+		while(wls_middle>100)
+		{
+			read_wls();
+			if(point==10)
+				soft_right();
+			else
+				soft_left();
+			if(wls_middle<150)
+			{
+				stopmm();
+				break;	
+			}
+			
+			
+		}
+		stopmm();
+		wls_print();
+		_delay_ms(1000);
+		while (1)
+		{
+			read_wls();
+			
+			
+			
+			//NODE DETECTED
+			//all white
+			if (wls_middle < 150 && wls_left < 150 && wls_right < 150)
+				break;
+				
+			
+			
+			else if (wls_middle < 150 && (wls_left < 150 || wls_right < 150))
+			{
+				velocity(120,120);
+				if(isWhite_node)
+					break;
+				
+				else
+				{
+				
+					if(wls_left < 150)
+					turn_left();
+					else if (wls_right < 150)
+					turn_right();
+					_delay_ms(5);
+					stopmm();
+				}
+				
+				
+			}
+			
+			
+			else if (wls_middle > 150 && (wls_left > 150 || wls_right> 150))
+			{
+				velocity(120,120);
+				
+				
+				 if(wls_left < 150)
+				{
+					soft_left();
+					_delay_ms(25);
+				}
+				else if(wls_right < 150)
+				{
+					soft_right();
+					_delay_ms(25);
+				}
+			}
+			//else if(wls_middle > 150 && wls_left < 100 && wls_right > 150)
+			else if (wls_middle > 150 && wls_left > 150 && wls_right> 150)
+			{
+				stopmm();
+			}
+			else
+			{
+				velocity(150,132);
+				forward();
+			}
+			
+		}
+  		left=0;
+  		right=0;
+  		while(left<250 && right<250)
+  		{
+  			velocity(150,132);
+  			forward();
+  		}
+ 		stopmm();
+		_delay_ms(1000);
 	}
 
 }
