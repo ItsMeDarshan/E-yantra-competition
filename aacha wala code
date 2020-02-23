@@ -474,9 +474,16 @@
 						 
 						 mat_in_bot[0]=comb2->mat;
 						 mat_in_bot[1]=comb1->mat;
-						 
-						 dup_path[3*(step-1)]=comb1->mat;
-						 dup_path[3*(step-1)+1]=comb2->mat;
+						 if(Dist[comb_of_HOUSE[step-1]][comb1->mat]<Dist[comb_of_HOUSE[step-1]][comb2->mat])
+						 {
+    						 dup_path[3*(step-1)]=comb1->mat;
+    						 dup_path[3*(step-1)+1]=comb2->mat;
+						 }
+						 else
+						 {
+						     dup_path[3*(step-1)]=comb2->mat;
+    						 dup_path[3*(step-1)+1]=comb1->mat;
+						 }
 						 dup_path[3*(step-1)+2]=comb_of_HOUSE[step]+6;
 						 int M1=mat_picked[0];
 						 int M2=mat_picked[1];
@@ -518,8 +525,16 @@
 						 }
 					 }
 					 
-					 dup_path[3*(step-1)]=comb1->mat;
-					 dup_path[3*(step-1)+1]=comb2->mat;
+					 if(Dist[comb_of_HOUSE[step-1]][comb1->mat]<Dist[comb_of_HOUSE[step-1]][comb2->mat])
+						 {
+    						 dup_path[3*(step-1)]=comb1->mat;
+    						 dup_path[3*(step-1)+1]=comb2->mat;
+						 }
+						 else
+						 {
+						     dup_path[3*(step-1)]=comb2->mat;
+    						 dup_path[3*(step-1)+1]=comb1->mat;
+						 }
 					 dup_path[3*(step-1)+2]=comb_of_HOUSE[step]+6;
 					 int M1=mat_picked[0];
 					 int M2=mat_picked[1];
@@ -549,8 +564,16 @@
 			 {
 				 
 				 
-				 dup_path[3*(step-1)]=comb1->mat;
-				 dup_path[3*(step-1)+1]=comb2->mat;
+				 if(Dist[comb_of_HOUSE[step-1]][comb1->mat]<Dist[comb_of_HOUSE[step-1]][comb2->mat])
+						 {
+    						 dup_path[3*(step-1)]=comb1->mat;
+    						 dup_path[3*(step-1)+1]=comb2->mat;
+						 }
+						 else
+						 {
+						     dup_path[3*(step-1)]=comb2->mat;
+    						 dup_path[3*(step-1)+1]=comb1->mat;
+						 }
 				 
 				 dup_path[3*(step-1)+2]=comb_of_HOUSE[step]+6;
 				 
@@ -578,7 +601,6 @@
 	
 	 
  }
-
  void delete_list(struct available_mat *head)
  {
 	 struct available_mat *temp;
