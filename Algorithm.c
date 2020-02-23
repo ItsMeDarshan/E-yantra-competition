@@ -13,7 +13,7 @@ Write your code in this editor and press "Run" button to compile and execute it.
 #include<stdbool.h>
 #define FALSE 0
 #define TRUE 1
-int or_path[12]={1,2,3,4,5,6,7,8,9,0,1,2};;
+int or_path[16]={0,0,0,0,1,2,3,4,5,6,7,8,9,0,1,2};;
 int dup_path[2];
 int iter=0;
 bool isPath=FALSE;
@@ -454,43 +454,58 @@ void f(int step,int comb_of_HOUSE[5],struct available_mat* prev,int mat_in_bot[]
     }
     
 }
-void permute(int *a, int l, int r)   // (*f)(int ,int ,int ,int ,int) https://medium.com/@jraleman/c-programming-language-passing-a-function-as-a-parameter-90d52fe842ea
+void permute(int *a, int l, int r,int flag)   // (*f)(int ,int ,int ,int ,int) https://medium.com/@jraleman/c-programming-language-passing-a-function-as-a-parameter-90d52fe842ea
 { 
    int i; 
    if (l == r) 
    {
        
-        printf("%d %d %d %d %d\n", a[0],a[1],a[2],a[3],a[4]); 
-     
-        
-        int available_materials[] = {2,6,5,3,2,3,1,4,1,4};
-        int bot_mat[] = {1,4};
-        int distance=0;
-        int step = 0;
-        
-        struct available_mat *head,*p,*prev,*q;
-        // copying CM from array to linked list
-        head=malloc(sizeof(struct available_mat));
-        head->mat=CM[0];
-        head->next=NULL;
-        p=head;
-        prev=head;
-        for(int i=1;i<8;i++)
-        {
-            q=malloc(sizeof(struct available_mat));
-            p->next=q;
-            q->mat=CM[i];
-            //printf("%d ",q->mat);
-            if(i<8)
-                p=q;
-            else
-                p->next=NULL;
-        }
-        
-        mat_picked[0]=bot_mat[0];
-        mat_picked[1]=bot_mat[1];
-        f(step,house,prev,bot_mat,distance); 
-         //(*f)(step,a,available_materials[],mat_in_bot[],dist);
+      printf("%d %d %d %d %d\n", a[0],a[1],a[2],a[3],a[4]); 
+
+      if(flag==0}
+         {
+           int start = 11;
+           int H5 = 10;
+           int distance = Dist[start][a[0]]+Dist[a[1]][a[2]]+Dist[a[2]][a[3]]+Dist[a[3][H5];
+           if(distance<max_distance)
+           {
+             for(i=0;i<4;i++}
+                 or_path[i]=a[i];
+                
+           }
+                                                                                   
+         }
+      else
+         {
+            int available_materials[] = {2,6,5,3,2,3,1,4,1,4};
+            int bot_mat[] = {1,4};
+            int distance=0;
+            int step = 0;
+
+            struct available_mat *head,*p,*prev,*q;
+            // copying CM from array to linked list
+            head=malloc(sizeof(struct available_mat));
+            head->mat=CM[0];
+            head->next=NULL;
+            p=head;
+            prev=head;
+            for(int i=1;i<8;i++)
+            {
+                q=malloc(sizeof(struct available_mat));
+                p->next=q;
+                q->mat=CM[i];
+                //printf("%d ",q->mat);
+                if(i<8)
+                    p=q;
+                else
+                    p->next=NULL;
+            }
+
+            mat_picked[0]=bot_mat[0];
+            mat_picked[1]=bot_mat[1];
+            f(step,house,prev,bot_mat,distance); 
+             //(*f)(step,a,available_materials[],mat_in_bot[],dist);
+         }
    }
    else
    { 
@@ -502,6 +517,24 @@ void permute(int *a, int l, int r)   // (*f)(int ,int ,int ,int ,int) https://me
        } 
    } 
 } 
+
+
+void decide_CM_for_H5()
+{
+    int H5_mat_array[4]={CM[8],CM[9],0,0};
+    for(int i=0;i<6;i++)
+    {
+        for(int j=i+1; j<7;j++)
+        {
+            if(CM[i]!=0 && CM[j]!=0)
+            {
+                H5_mat_array[2]=CM[i];
+                H5_mat_array[3]=CM[j];
+                permute(H5_mat_array,0,3,0);
+            }
+        }
+    }
+}
   
 /* Driver program to test above functions */
 int main() 
