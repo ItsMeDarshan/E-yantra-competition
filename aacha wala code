@@ -162,11 +162,22 @@
 
  int calculate_dist(int mat1,int mat2,int prev_H,int now_H)
  {
-	 if(Dist[prev_H+5][mat1-1]<Dist[prev_H+5][mat2-1])
-	 return Dist[prev_H+5][mat1-1]+Dist[mat1-1][mat2-1]+Dist[mat2-1][now_H+5];
-	 else
-	 return Dist[mat2-1][prev_H+5]+Dist[mat1-1][mat2-1]+Dist[now_H+5][mat1-1];
-	 
+     if(mat1==0 || mat2==0)
+     {
+         if(mat1!=0)
+          return Dist[prev_H+5][mat1-1]+Dist[mat1-1][now_H+5];
+         else if(mat2!=0)
+            return Dist[prev_H+5][mat2-1]+Dist[mat2-1][now_H+5];
+        else
+            return Dist[prev_H+5][now_H+5];
+     }
+     else
+     {
+    	 if(Dist[prev_H+5][mat1-1]<Dist[prev_H+5][mat2-1])
+    	    return Dist[prev_H+5][mat1-1]+Dist[mat1-1][mat2-1]+Dist[mat2-1][now_H+5];
+    	 else
+    	     return Dist[mat2-1][prev_H+5]+Dist[mat1-1][mat2-1]+Dist[now_H+5][mat1-1];
+     }	 
  }
 
 
@@ -368,19 +379,17 @@
 		 int distance=distance_upto_now+Dist[comb_of_HOUSE[step-1]+6][comb_of_HOUSE[step]+6];
 		 
 		 if(distance<max_distance)
-		 {
-			 for(int i=0;i<9;i++)
-			 {
-				 or_path[i]=dup_path[i];
-				 
-			 }
+        {
+            for(int i=0;i<9;i++)
+                or_path[i+5]=dup_path[i];
+                
+           
+            max_distance=distance;
+            or_path[3*(step-1)+5]=mat_in_bot[1];
+            or_path[3*(step-1)+1+5]=mat_in_bot[0];
+            or_path[3*(step-1)+2+5]=comb_of_HOUSE[step]+6;
 			 
-			 max_distance=distance;
-			 or_path[3*(step-1)]=mat_in_bot[1];
-			 or_path[3*(step-1)+1]=mat_in_bot[0];
-			 or_path[3*(step-1)+2]=comb_of_HOUSE[step]+6;
-			 
-			 return 0;
+		
 		 }
 	 }
 	 else if(step!=4)
@@ -582,23 +591,45 @@
 	 free(head);
  }
 
- void permute(int *a, int l, int r,struct available_mat* prev)   // (*f)(int ,int ,int ,int ,int) https://medium.com/@jraleman/c-programming-language-passing-a-function-as-a-parameter-90d52fe842ea
+ void permute(int *a, int l, int r,struct available_mat* prev,int flag)   // (*f)(int ,int ,int ,int ,int) https://medium.com/@jraleman/c-programming-language-passing-a-function-as-a-parameter-90d52fe842ea
  {
 	 int i;
 	 if (l == r)
 	 {
+          if(flag==0)
+         {
+           int start = 11;
+           int H5 = 10;
 
-		 
-		 int bot_mat[] = {2,3};
-		 int distance=0;
-		 int step = 0;
-
-		 
-		 mat_picked[0]=bot_mat[0];
-		 mat_picked[1]=bot_mat[1];
-		 CM_pick_order(step,house,prev,bot_mat,distance);
-		 
-		 
+           int distance = Dist[start][a[0]-1]+Dist[a[0]-1][a[1]-1]+Dist[a[1]-1][a[2]-1]+Dist[a[2]-1][a[3]-1]+Dist[a[3]-1][H5];
+           if(distance<max_distance)
+           {
+               printf("%d %d %d %d \n", a[0],a[1],a[2],a[3]);
+               printf("dist = %d\n",distance);
+             for(i=0;i<4;i++)
+                 or_path[i]=a[i];
+                 
+             
+            isSelected=TRUE;
+             max_distance=distance;
+                
+           }
+                                                                              
+         }
+         else
+         {
+    		 
+    		 int bot_mat[] = {mat_picked[0],mat_picked[1]};
+    		 int distance=0;
+    		 int step = 0;
+     
+    		 mat_picked[0]=bot_mat[0];
+    		 mat_picked[1]=bot_mat[1];
+    		 CM_pick_order(step,house,prev,bot_mat,distance);
+    		 
+    		 mat_picked[0]=bot_mat[0];
+    		 mat_picked[1]=bot_mat[1];
+    	 }
 	 }
 
 	 else
@@ -606,11 +637,40 @@
 		 for (i = l; i <= r; i++)
 		 {
 			 swap((a+l), (a+i));
-			 permute(a, l+1, r,prev);
+			 permute(a, l+1, r,prev,flag);
 			 swap((a+l), (a+i)); //backtrack
 		 }
 	 }
  }
+ 
+ void decide_CM_for_H5()
+{
+    int H5_mat_array[4]={CM[8],CM[9],0,0};
+    for(int i=0;i<6;i++)
+    {
+      if(CM[i]!=0)
+      {
+        for(int j=i+1; j<7;j++)
+        {
+            if(CM[j]!=0)
+            {
+                H5_mat_array[2]=CM[i];
+                H5_mat_array[3]=CM[j];
+                struct available_mat* dummy;
+                permute(H5_mat_array,0,3,dummy,0);
+                if(isSelected)
+                {
+                    mat_picked[0]=CM[i];
+                    mat_picked[1]=CM[j];
+                }
+                isSelected=FALSE;
+            }
+        }
+      }
+    }
+    max_distance=999;
+}
+
  void make_path()
  {
 	 struct available_mat *head,*p,*prev,*q;
@@ -631,12 +691,9 @@
 		 else
 		 p->next=NULL;
 	 }
-	 
-	 permute(house, 1, 4,prev);
+	 decide_CM_for_H5();
+	 permute(house, 1, 4,prev,1);
 	 delete_list(head);
-	 
-	 
-	 
  }
  /////////////////////////////////////////////////////////////////////
  //////////////////////////////////////////////////////////////////////////////
