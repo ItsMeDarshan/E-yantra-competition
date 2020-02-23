@@ -227,14 +227,17 @@ void all_init()
 	
 	
 	//servo initial positions.............................................
-	OCR4A=350;    //SERVO1
+	OCR4A=365;    //SERVO1
 	//Wait();
 	OCR4B=450;    //SERVO2
 	// Wait();
 	OCR1B=316;		//SERVO3
 	OCR1A=300;		//SERVO4
 	LCD_Init();
-	
+	left_encoder_pin_config();
+	right_encoder_pin_config();
+	left_position_encoder_interrupt_init();
+	right_position_encoder_interrupt_init();
 	
 }
 
