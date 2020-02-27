@@ -5,7 +5,8 @@
  *  Author: yadav
  */ 
 
-
+#include <stdio.h>
+#include <stdlib.h>
 #include <avr/io.h>
 typedef int bool;
 #define TRUE  1
@@ -15,6 +16,7 @@ typedef int bool;
 #define stepac 0
 #define clk 1
 #define anclk 0
+#define byte uint8_t
 #include <avr/interrupt.h>
 #include <util/delay.h>
 int sensor_values[3];
@@ -25,7 +27,7 @@ int wls_left;
 int wls_middle;
 int wls_right;
 int count=0;
-
+int stepper_count=0;
 //LCD definition......................................///////////////////////////////////////
 #define LCD_Data_Dir DDRK		/* Define LCD data port direction */
 #define LCD_Command_Dir DDRC		/* Define LCD command port direction register */
@@ -38,15 +40,49 @@ int count=0;
 
 
 
+void left_encoder_pin_config (void) //Configure Interrupt 6
+{
+	DDRE = DDRE & 0x9F; //Set the direction of the PORTE 6 pin as input
+	PORTE = PORTE | 0x40; //Enable internal pull-up for PORTE 6 pin
+}
+
+void right_encoder_pin_config (void) //Configure Interrupt 5
+{
+	DDRE = DDRE & 0xDF; //Set the direction of the PORTE 5 pin as input
+	PORTE = PORTE | 0x20; //Enable internal pull-up for PORTE 5 pin
+}
+void left_position_encoder_interrupt_init (void) //Interrupt 4 enable
+{
+	cli(); //Clears the global interrupt
+	EICRB = EICRB | 0x20; // INT6 is set to trigger with falling edge
+	EIMSK = EIMSK | 0x40; // Enable Interrupt INT6 for left position encoder
+	sei(); // Enables the global interrupt
+}
+void right_position_encoder_interrupt_init (void) //Interrupt 5 enable
+{
+	cli(); //Clears the global interrupt
+	EICRB = EICRB | 0x08; // INT5 is set to trigger with falling edge
+	EIMSK = EIMSK | 0x20; // Enable Interrupt INT5 for left position encoder
+	sei(); // Enables the global interrupt
+}
+ISR(INT6_vect)
+{
+	left+=1;
+}
+ISR(INT5_vect)
+{
+	right+=1;
+}
+
 
 
 
 
 //graph definition......................................///////////////////////////////////////
-#define INFINITY 9999
+#define INFINITY 99
 #define MAX 16
 void dijkstra(int G[MAX][MAX],int n,int startnode,int lastnode);
-int path[50][50];
+int path[15][15];
 int step=0;
 ///////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -97,13 +133,13 @@ void place_lr();
 void place_hr();
 void place_in(int d, int pi, int pl);
 void pick_from(int d, int a, int p);
-void papom(int dir, int pick, int place);
+void papom( int pick, int place,int node);
 void stepper(int rot, int deg);
 void wall_follower();
 void ir();
 void forward_wls_zz(int node,int speed);
 void line_follower();
-
+void make_path();
 ///////////////////////////////////////////////////////////////////////////////////////////////
 
 
@@ -113,6 +149,7 @@ void line_follower();
 int wls_left, wls_right, wls_middle;
 int ir_left,ir_right;
 int count1=0;
+unsigned char new_state='r';
 ///////////////////////////////////////////////////////////////////////////////////////////////
 
 
@@ -120,8 +157,8 @@ void all_init()
 {
 	
 	//stepper connections
-	DDRA=0x3F;
-	PORTA =0x20;
+	//DDRA=0x3F;
+	//PORTA =0x20;
 	
 	//direction 0   anticlockwise
 	//direction 1   clockwise
@@ -160,8 +197,8 @@ void all_init()
 	PORTB=0xff;
 	DDRH=0xFF;
 	PORTH=0xff;
-	//DDRH=0xFF;
-	//PORTH=0xff;
+	DDRE=0xFF;
+	PORTE=0xff;
 	
 	//Servos pwm registers
 	// 	TCCR1A = 0xA9;
@@ -185,19 +222,27 @@ void all_init()
 
 	ICR4=4999;  //fPWM=50Hz (Period = 20ms Standard).
 
-	
+	TCCR3A|=(1<<COM3A1)|(1<<COM3B1)|(1<<WGM31);        //NON Inverted PWM
+	TCCR3B|=(1<<WGM33)|(1<<WGM32)|(1<<CS31)|(1<<CS30); //PRESCALER=64 MODE 14(FAST PWM)
+
+	ICR3=4999;  //fPWM=50Hz (Period = 20ms Standard).
 	
 	
 	
 	//servo initial positions.............................................
-	OCR4A=350;    //SERVO1
+	OCR3A=97;        //servo 00
+	OCR3B=97;	//SERVO01
+	OCR4A=365;    //SERVO1
 	//Wait();
 	OCR4B=450;    //SERVO2
 	// Wait();
 	OCR1B=316;		//SERVO3
 	OCR1A=300;		//SERVO4
 	LCD_Init();
-	
+	left_encoder_pin_config();
+	right_encoder_pin_config();
+	left_position_encoder_interrupt_init();
+	right_position_encoder_interrupt_init();
 	
 }
 
@@ -277,9 +322,606 @@ void wls_print()
 	LCD_String_xy(1,0,c);
 	_delay_ms(10);
 }
+
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+//                             ALGO PART
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////
+int CM_place_in_bot[4]={0,0,0,0};
+int high_or_low[5]={0,1,1,0,0};
+int mat_req_for_house[5]={2,2,2,2,2};
+int mat_remain[6]={1,1,1,1,1,1};
+ int or_path[17]={0,0,0,0,11};
+ int dup_path[12];
+ 
+ bool isSelected=FALSE;
+ int mat_picked[]={2,2};
+ int Dist[12][12]={  {0, 5, 2, 5, 4, 7, 1, 4, 3, 6, 7,  3},//1
+ {5, 0, 5, 2, 7, 4, 4, 1, 6, 3, 7,  3},//2
+ {2, 5, 0, 5, 2, 7, 1, 4, 1, 6, 5,  5},//3
+ {5, 2, 5, 0, 7, 2, 4, 1, 6, 1, 5,  5},//4
+ {4, 7, 2, 7, 0, 6, 3, 6, 1, 6, 3,  7},//5
+ {7, 4, 7, 2, 6, 0, 6, 3, 6, 1, 3,  7},//6
+ {1, 4, 1, 4, 3, 6, 0, 3, 2, 7, 6,  4},//h1 7
+ {4, 1, 4, 1, 6, 3, 3, 0, 7, 2, 6,  4},//h2 8
+ {3, 6, 1, 6, 1, 6, 2, 7, 0, 5, 4,  6},//h3 9
+ {6, 3, 6, 1, 6, 1, 7, 2, 5, 0, 4,  6},//h4 10
+ {7, 7, 5, 5, 3, 3, 6, 6, 4, 4, 0, 10},//h5 11
+ {3, 3, 5, 5, 7, 7, 4, 4, 6, 6, 10, 0},//start
+ };
+ 
+ int house[]={5,1,2,3,4};
+ int CM[] = {5,6,2,3,6,4,1,2,4,1};
+ struct available_mat
+ {
+	 int mat;
+	 struct available_mat *next;
+ };
 
 
+
+int calculate_dist(int mat1,int mat2,int prev_H,int now_H)
+{
+	if(mat1==0 || mat2==0)
+	{
+		if(mat1!=0)
+		return Dist[prev_H+5][mat1-1]+Dist[mat1-1][now_H+5];
+		else if(mat2!=0)
+		return Dist[prev_H+5][mat2-1]+Dist[mat2-1][now_H+5];
+		else
+		return Dist[prev_H+5][now_H+5];
+	}
+	else
+	{
+		if(Dist[prev_H+5][mat1-1]<Dist[prev_H+5][mat2-1])
+		return Dist[prev_H+5][mat1-1]+Dist[mat1-1][mat2-1]+Dist[mat2-1][now_H+5];
+		else
+		return Dist[mat2-1][prev_H+5]+Dist[mat1-1][mat2-1]+Dist[now_H+5][mat1-1];
+	}
+}
+
+
+ void decide_which_mat_take(struct available_mat* prev,struct available_mat* now,int bot_mat[],int H, int *b)
+ {
+	 int a=2;
+	 
+	 
+	 struct available_mat *p,*q,*s1,*s2,*temp;
+	 
+	 bool CM1=TRUE;
+	 bool CM2=TRUE;
+	 s1=now;
+	 s2=prev;
+	 int mat_for_house_H[] = {CM[2*H-1],CM[2*H-2]};
+	 
+	 unsigned char c[10];
+	 
+	 //check bot_mat with mat req for given house
+	 if(bot_mat[0]==mat_for_house_H[0] && CM1)
+	 {
+		 
+		 CM1=FALSE;
+		 a--;
+	 }
+	 else if(bot_mat[0]==mat_for_house_H[1] && CM2)
+	 {
+		 
+		 CM2=FALSE;
+		 a--;
+	 }
+	 if(bot_mat[1]==mat_for_house_H[0] && CM1)
+	 {
+		 
+		 CM1=FALSE;
+		 a--;
+	 }
+	 else if(bot_mat[1]==mat_for_house_H[1] && CM2)
+	 {
+		 
+		 CM2=FALSE;
+		 a--;
+	 }
+	 if(!CM1 && a==1)
+	 {
+		 q=malloc(sizeof(struct available_mat));
+		 now->mat=mat_for_house_H[1];
+		 
+		 now->next=q;
+		 now=q;
+	 }
+	 else if(!CM2 && a==1)
+	 {
+		 q=malloc(sizeof(struct available_mat));
+		 now->mat=mat_for_house_H[0];
+		 
+		 now->next=q;
+		 now=q;
+	 }
+	 bool ismat1=FALSE;
+	 bool ismat2=FALSE;
+	 bool for_H=FALSE;
+	 *b=a;
+	 int i=0;
+	 while(prev!=NULL)
+	 {
+		 
+		 //if mat in bot is mat req for house
+		 if(a==0)
+		 
+		 {
+			 
+			 if((prev->mat!=mat_picked[0] || ismat1) && (prev->mat!=mat_picked[1] || ismat2) )
+			 {
+				 q=malloc(sizeof(struct available_mat));
+				 now->mat=prev->mat;
+				 
+				 
+				 now->next=q;
+				 temp=now;
+				 now=q;
+			 }
+			 else
+			 {
+				 if(prev->mat==mat_picked[0])
+				 ismat1=TRUE;
+				 else if(prev->mat==mat_picked[1])
+				 ismat2=TRUE;
+			 }
+			 
+			 prev=prev->next;
+		 }
+		 
+		 else if(a==1)
+		 {
+			 if(!CM1)
+			 {
+				 
+				 if(((prev->mat!=mat_picked[0] || ismat1) && (prev->mat!=mat_picked[1] || ismat2) )&& (prev->mat!=mat_for_house_H[1] || for_H) )
+				 {
+					 q=malloc(sizeof(struct available_mat));
+					 now->mat=prev->mat;
+					 
+					 now->next=q;
+					 temp=now;
+					 now=q;
+				 }
+				 else
+				 {
+					 if(prev->mat==mat_picked[0])
+					 ismat1=TRUE;
+					 else if(prev->mat==mat_picked[1])
+					 ismat2=TRUE;
+					 else if(prev->mat==mat_for_house_H[1])
+					 for_H=TRUE;
+				 }
+				 
+				 prev=prev->next;
+				 
+			 }
+			 else if(!CM2)
+			 {
+				 
+				 if(((prev->mat!=mat_picked[0] || ismat1) && (prev->mat!=mat_picked[1] || ismat2) )&& (prev->mat!=mat_for_house_H[0] || for_H))
+				 {
+					 q=malloc(sizeof(struct available_mat));
+					 now->mat=prev->mat;
+					 
+					 now->next=q;
+					 temp=now;
+					 now=q;
+				 }
+				 else
+				 {
+					 if(prev->mat==mat_picked[0])
+					 ismat1=TRUE;
+					 else if(prev->mat==mat_picked[1])
+					 ismat2=TRUE;
+					 else if(prev->mat==mat_for_house_H[0])
+					 for_H=TRUE;
+				 }
+				 
+				 prev=prev->next;
+			 }
+		 }
+		 //mat req for house is not in bot hence take those material only
+		 else if(a==2)
+		 {
+			 unsigned char c[10];
+			 
+			 prev=NULL;
+			 q=malloc(sizeof(struct available_mat));
+			 
+			 
+			 now->mat=mat_for_house_H[0];
+			 
+			 now->next=q;
+			 now=q;
+			 now->mat=mat_for_house_H[1];
+			 
+			 
+		 }
+	 }
+	 if(a!=2)
+	 {
+		 now=temp;
+		 free(q);
+	 }
+	 now->next=NULL;
+	 now=s1;
+	 prev=s2;
+	 
+	 
+ }
+
+
+ void swap(int *x, int *y)
+ {
+	 int temp;
+	 temp = *x;
+	 *x = *y;
+	 *y = temp;
+ }
+
+
+ int max_distance= 99;
+
+ ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+ //                              CM_pick_order
+ ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+  
+  void CM_pick_order(int step,int comb_of_HOUSE[5],struct available_mat* prev,int mat_in_bot[],int distance_upto_now)
+  {
+
+	  step++;
+	  if(step==4)
+	  {
+
+		  int distance=distance_upto_now+Dist[comb_of_HOUSE[step-1]+6][comb_of_HOUSE[step]+6];
+		  
+		  if(distance<max_distance)
+		  {
+			  for(int i=0;i<9;i++)
+			  or_path[i+5]=dup_path[i];
+			  
+			  
+			  max_distance=distance;
+			  or_path[3*(step-1)+5]=0;
+			  or_path[3*(step-1)+1+5]=0;
+			  or_path[3*(step-1)+2+5]=comb_of_HOUSE[step]+6;
+			  
+			  
+		  }
+	  }
+	  else if(step!=4)
+	  {
+		  
+		  
+		  // 		 int new_mat_in_bot[2];
+		  // 		 new_mat_in_bot[0]=mat_in_bot[0];
+		  // 		 new_mat_in_bot[1]=mat_in_bot[1];
+		  int prev_m1=mat_picked[0];
+		  int prev_m2=mat_picked[1];
+		  
+		  struct available_mat *now,*dup_now,*availmat,*dup_availmat,*head,*comb1,*comb2,*q,*for_availmat,*for_prev,*for_c1,*for_c2;
+		  int a;
+		  now = malloc(sizeof(struct available_mat));
+		  dup_now=now;
+		  availmat=malloc(sizeof(struct available_mat));
+		  dup_availmat=availmat;
+		  
+		  //see available combination of available_materials
+		  decide_which_mat_take(prev, now, mat_in_bot, comb_of_HOUSE[step], &a);
+		  
+		  //this will be used for generating combination of materials
+		  comb1=now;
+		  comb2=now->next;
+		  
+		  //now combination of available materials
+		  
+		  head=availmat;
+		  for_prev=prev;
+		  bool ismat1=FALSE;
+		  bool ismat2=FALSE;
+		  bool CM1=FALSE;
+		  bool CM2=FALSE;
+		  bool isQ=FALSE;
+		  for_availmat=availmat;
+		  while(prev!=NULL)
+		  {
+			  //making list for next available material
+			  if((prev->mat!=mat_picked[0] || ismat1) && (prev->mat!=mat_picked[1] || ismat2)  )
+			  {
+				  isQ=TRUE;
+				  q=malloc(sizeof(struct available_mat));
+				  availmat->mat=prev->mat;
+				  for_availmat=availmat;
+				  
+				  availmat->next=q;
+				  availmat=q;
+			  }
+			  else
+			  {
+				  if(prev->mat==mat_picked[0])
+				  ismat1=TRUE;
+				  else if(prev->mat=mat_picked[1])
+				  ismat2=TRUE;
+			  }
+			  
+			  prev=prev->next;
+		  }
+		  if(isQ)
+		  free(q);
+		  
+		  availmat=for_availmat;
+		  
+		  availmat->next=NULL;
+		  availmat=head;
+		  prev=for_prev;
+		  
+		  int distance;
+		  //begin the combination of available_materials
+		  
+		  if(a==0)
+		  {
+			  while(comb1->next!=NULL)
+			  {
+				  while(comb2!=NULL)
+				  {
+					  
+					  distance=distance_upto_now+calculate_dist(comb2->mat,comb1->mat,comb_of_HOUSE[step-1],comb_of_HOUSE[step]);
+					  if(distance<max_distance)
+					  {
+						  
+						  mat_in_bot[0]=comb2->mat;
+						  mat_in_bot[1]=comb1->mat;
+						  if(Dist[comb_of_HOUSE[step-1]][comb1->mat]<Dist[comb_of_HOUSE[step-1]][comb2->mat])
+						  {
+							  dup_path[3*(step-1)]=comb1->mat;
+							  dup_path[3*(step-1)+1]=comb2->mat;
+						  }
+						  else
+						  {
+							  dup_path[3*(step-1)]=comb2->mat;
+							  dup_path[3*(step-1)+1]=comb1->mat;
+						  }
+						  dup_path[3*(step-1)+2]=comb_of_HOUSE[step]+6;
+						  int M1=mat_picked[0];
+						  int M2=mat_picked[1];
+						  mat_picked[0]=comb1->mat;
+						  mat_picked[1]=comb2->mat;
+						  
+						  CM_pick_order(step, comb_of_HOUSE, availmat, mat_in_bot, distance);
+						  
+						  mat_picked[0]=M1;
+						  mat_picked[1]=M2;
+						  
+						  
+					  }
+					  
+					  comb2=comb2->next;
+				  }
+				  
+				  comb1=comb1->next;
+				  comb2=comb1->next;
+			  }
+		  }
+		  else if(a==1)
+		  {
+			  
+			  while(comb2!=NULL)
+			  {
+				  
+				  distance=distance_upto_now+calculate_dist(comb2->mat,comb1->mat,comb_of_HOUSE[step-1],comb_of_HOUSE[step]);
+				  
+				  if(distance<max_distance)
+				  {
+					  for(int i=0;i<2;i++)
+					  {
+						  if(mat_in_bot[i]==CM[2*comb_of_HOUSE[step]-1] ||  mat_in_bot[i]==CM[2*comb_of_HOUSE[step]-2] )
+						  {
+							  
+							  mat_in_bot[i]=comb2->mat;
+							  break;
+						  }
+					  }
+					  
+					  if(Dist[comb_of_HOUSE[step-1]][comb1->mat]<Dist[comb_of_HOUSE[step-1]][comb2->mat])
+					  {
+						  dup_path[3*(step-1)]=comb1->mat;
+						  dup_path[3*(step-1)+1]=comb2->mat;
+					  }
+					  else
+					  {
+						  dup_path[3*(step-1)]=comb2->mat;
+						  dup_path[3*(step-1)+1]=comb1->mat;
+					  }
+					  dup_path[3*(step-1)+2]=comb_of_HOUSE[step]+6;
+					  int M1=mat_picked[0];
+					  int M2=mat_picked[1];
+					  mat_picked[0]=comb1->mat;
+					  mat_picked[1]=comb2->mat;
+					  
+					  CM_pick_order(step, comb_of_HOUSE, availmat, mat_in_bot, distance);
+					  
+					  // 					 new_mat_in_bot[0]=mat_in_bot[0];
+					  // 					 new_mat_in_bot[1]=mat_in_bot[1];
+					  mat_picked[0]=M1;
+					  mat_picked[1]=M2;
+					  
+				  }
+				  comb2=comb2->next;
+			  }
+			  //free(comb1);
+			  
+		  }
+		  else if(a==2)
+		  {
+			  
+			  
+			  distance=distance_upto_now+calculate_dist(comb2->mat,comb1->mat,comb_of_HOUSE[step-1],comb_of_HOUSE[step]);
+			  
+			  if(distance<max_distance)
+			  {
+				  
+				  
+				  if(Dist[comb_of_HOUSE[step-1]][comb1->mat]<Dist[comb_of_HOUSE[step-1]][comb2->mat])
+				  {
+					  dup_path[3*(step-1)]=comb1->mat;
+					  dup_path[3*(step-1)+1]=comb2->mat;
+				  }
+				  else
+				  {
+					  dup_path[3*(step-1)]=comb2->mat;
+					  dup_path[3*(step-1)+1]=comb1->mat;
+				  }
+				  
+				  dup_path[3*(step-1)+2]=comb_of_HOUSE[step]+6;
+				  
+				  int M1=mat_picked[0];
+				  int M2=mat_picked[1];
+				  mat_picked[0]=comb1->mat;
+				  mat_picked[1]=comb2->mat;
+				  
+				  CM_pick_order(step, comb_of_HOUSE, availmat, mat_in_bot, distance);
+				  mat_picked[0]=M1;
+				  mat_picked[1]=M2;
+				  
+			  }
+		  }
+		  
+		  delete_list(dup_now);
+		  delete_list(dup_availmat);
+		  
+		  // free(&a);
+		  mat_picked[0]=prev_m1;
+		  mat_picked[1]=prev_m2;
+		  //free(comb1);
+		  //free(comb2);
+	  }
+	  
+	  
+  }
+
+ void delete_list(struct available_mat *head)
+ {
+	 struct available_mat *temp;
+	 while(head->next!=NULL)
+	 {
+		 temp=head;
+		 head=head->next;
+		 free(temp);
+	 }
+	 free(head);
+ }
+
+void permute(int *a, int l, int r,struct available_mat* prev,int flag)   // (*f)(int ,int ,int ,int ,int) https://medium.com/@jraleman/c-programming-language-passing-a-function-as-a-parameter-90d52fe842ea
+{
+	int i;
+	if (l == r)
+	{
+		if(flag==0)
+		{
+			int start = 11;
+			int H5 = 10;
+
+			int distance = Dist[start][a[0]-1]+Dist[a[0]-1][a[1]-1]+Dist[a[1]-1][a[2]-1]+Dist[a[2]-1][a[3]-1]+Dist[a[3]-1][H5];
+			if(distance<max_distance)
+			{
+				
+				for(i=0;i<4;i++)
+					or_path[i]=a[i];
+				
+				
+				isSelected=TRUE;
+				max_distance=distance;
+				
+			}
+			
+		}
+		else
+		{
+			
+			int a = mat_picked[0];
+			int b = mat_picked[1];
+			int bot_mat[] = {mat_picked[0],mat_picked[1]};
+			int distance=0;
+			int step = 0;
+			
+			mat_picked[0]=bot_mat[0];
+			mat_picked[1]=bot_mat[1];
+			CM_pick_order(step,house,prev,bot_mat,distance);
+			
+			mat_picked[0]=a;
+			mat_picked[1]=b;
+		}
+	}
+
+	else
+	{
+		for (i = l; i <= r; i++)
+		{
+			swap((a+l), (a+i));
+			permute(a, l+1, r,prev,flag);
+			swap((a+l), (a+i)); //backtrack
+		}
+	}
+}
+
+void decide_CM_for_H5()
+{
+	int H5_mat_array[4]={CM[8],CM[9],0,0};
+	for(int i=0;i<6;i++)
+	{
+		if(CM[i]!=0)
+		{
+			for(int j=i+1; j<7;j++)
+			{
+				if(CM[j]!=0)
+				{
+					H5_mat_array[2]=CM[i];
+					H5_mat_array[3]=CM[j];
+					struct available_mat* dummy;
+					permute(H5_mat_array,0,3,dummy,0);
+					if(isSelected)
+					{
+						mat_picked[0]=CM[i];
+						mat_picked[1]=CM[j];
+					}
+					isSelected=FALSE;
+				}
+			}
+		}
+	}
+	max_distance=999;
+}
+
+void make_path()
+{
+	struct available_mat *head,*p,*prev,*q;
+	// copying CM from array to linked list
+	head=malloc(sizeof(struct available_mat));
+	head->mat=CM[0];
+	head->next=NULL;
+	p=head;
+	prev=head;
+	for(int i=1;i<8;i++)
+	{
+		q=malloc(sizeof(struct available_mat));
+		p->next=q;
+		q->mat=CM[i];
+		
+		if(i<8)
+		p=q;
+		else
+		p->next=NULL;
+	}
+	decide_CM_for_H5();
+	permute(house, 1, 4,prev,1);
+	delete_list(head);
+}
+ /////////////////////////////////////////////////////////////////////////////////////////////////////
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 
 /*
@@ -314,14 +956,23 @@ void shortest_path(int u,int l)
 		{1,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0}};
 		
 
-		
-		dijkstra(G,n,u,l);
-		
-		 for(int i=0;i<count1;i++)
-		 {   
-			 //printf("%d>>%d",path[step][i],path[step][i+1]);
-			 travel(path[step][i],path[step][i+1]);
-		 }
+		if(u==l)
+		{LCD_Clear();
+			LCD_String("same");
+			_delay_ms(1000);
+			LCD_Clear();
+		}
+		else
+		{
+			dijkstra(G,n,u,l);
+			
+			for(int i=0;i<count1;i++)
+			{
+				//printf("%d>>%d",path[step][i],path[step][i+1]);
+				travel(path[step][i],path[step][i+1]);
+			}
+		}
+		return 0;
 }
 
 /*
@@ -521,12 +1172,16 @@ void travel(int p1, int p2)
 	else if (( p1 == 8 && p2 == 9)||( p1 == 9 && p2 == 10)|| (p1 == 10 && p2 == 9)|| (p1 == 9 && p2 == 8))
 	{
 		//printf("whiteline follow\n");
-		follow_white_line(1,150);
+		follow_white_line(1,150,p1);
 	}
 	else if (p2 == 9)
 	{
 		//printf("forward_wls\n");
 		forward_wls(1, 150);
+	}
+	else if((p1==7 && p2==8) || (p1==10 && p2==11) )
+	{
+		forward_wls(1,130);
 	}
 	else
 	{
@@ -539,107 +1194,228 @@ void travel(int p1, int p2)
 
 
 }
-void follow_white_line(int node,int speed)
+bool isWhite_node()
 {
-	int i=0,node_covered=0;
-	read_wls();
-	_delay_ms(100);
-
-	if(wls_middle>130 && wls_left>130)
+	while(1)
 	{
-		velocity(130,130);
-		
-		while(wls_middle>130)
-		{
-			soft_left();
-			read_wls();
-		}
-	}
-	else if(wls_middle>130 && wls_right>130)
-	{
-		velocity(110,110);
-		soft_right();
-		while(wls_middle>130)
-		{
-			soft_right();
-			read_wls();
-		}
+		read_wls();
+		if(wls_left>100 && wls_middle<100 && wls_right>100)
+			turn_right();
+		else if(wls_left<100 && wls_middle<100 && wls_right<100)
+			turn_left();
+		else if(wls_left<100 && wls_middle<100 && wls_right<100)
+			return TRUE;
+		else
+			return FALSE;
 	}
 	
-	while (wls_middle < 190 && wls_left < 190 && wls_right < 190)
+}
+void follow_white_line(int node,int speed,int point)
+{
+	if(point==9)
 	{
-		velocity(150,132);
-		forward();
-		read_wls();
-		
-	}
-	velocity(150,135);
-	forward();
-
-	while (1)
-	{
-		read_wls();
-		
-		if (wls_middle < 170 && wls_left < 170 && wls_right < 170)
+// 		read_wls();
+// 		
+// 		//in white node
+// 		while (wls_middle < 100 && (wls_left < 100 || wls_right < 100))
+// 		{
+// 			velocity(150,132);
+// 			forward();
+// 			read_wls();
+// 			
+// 			
+// 		}
+// 		velocity(150,135);
+// 		forward();
+		while (1)
 		{
-			velocity(150,133);
-			backward();
-			_delay_ms(30);
-			stopmm();
-			_delay_ms(20);
-			wls_print();
-			_delay_ms(1000);
-			LCD_Clear();
+			read_wls();
 			
-			if(wls_middle>70 && wls_right <70 && wls_left<70)
+			
+			
+			//NODE DETECTED
+			//all white
+			if (wls_middle < 150 && wls_left < 150 && wls_right < 150)
 			{
-				velocity(150,150);
-				forward();
-				forward_wls(1,150);
+				all_sensor_white();
+				read_wls();
+				
+					forward_wls(1,150);
+					break;
+				
+				
 			}
 			
-			break;
-		}
-		else if (wls_left < 170 && wls_middle < 170 && wls_right > 170)
-		{
-			velocity(120,120);
-			turn_left();
-		}
-		else if (wls_middle < 170 && wls_left > 170 && wls_right < 170)
-		{
-			velocity(120,120);
-			turn_right();
-		}
-		
-		
-		else if (wls_left > 170 && wls_middle > 170 && wls_right < 170)
-		{
+			else if (wls_middle < 150 && (wls_left < 150 || wls_right < 150))
+			{
+				velocity(120,120);
+				
+				
+				if(wls_left < 150)
+				turn_right();
+				else if (wls_right < 150)
+				turn_left();
+				_delay_ms(5);
+				stopmm();
+				
+				
+				
+			}
 			
 			
-			velocity(120,120);
-			soft_right();
-			_delay_ms(50);
+			else if (wls_middle > 150 && (wls_left < 150 || wls_right< 150))
+			{
+				velocity(120,120);
+				if(wls_middle>150 && wls_left<150 && wls_right<150)
+				{
+				  forward_wls(1,150);
+				  break;
+				}
+				
+				else if(wls_left < 150)
+				{
+					soft_left();
+					_delay_ms(25);
+				}
+				else if(wls_right < 150)
+				{
+					soft_right();
+					_delay_ms(25);
+				}
+			}
+			//else if(wls_middle > 150 && wls_left < 100 && wls_right > 150)
+// 			else if(wls_middle>150 && wls_left>150 && wls_right>150)
+// 			{
+// 			    forward_wls(1,250);
+// 				break;
+// 			}
+			else
+			{
+				velocity(150,132);
+				forward();
+			}
 			
-		}
-		else if (wls_left < 170 && wls_middle > 170 && wls_right > 170)
-		{
 			
-			
-			velocity(120,120);
-			soft_left();
-			_delay_ms(50);
-			
-		}
-		
-		
-		else
-		{
-			velocity(150,132);
-			forward();
-		}
-		
-		
 
+		}
+		//wls_print();
+		//_delay_ms(5000);
+	}
+	
+	
+	
+	
+	//if point is 8 or 10
+	
+	else
+	{
+		
+		stopmm();
+		read_wls();
+		wls_print();
+		_delay_ms(500);
+		stopmm();
+		while(wls_middle>100)
+		{
+			read_wls();
+			if(point==10)
+				soft_right();
+			else
+				soft_left();
+			if(wls_middle<150)
+			{
+				stopmm();
+				break;	
+			}
+			
+			
+		}
+		stopmm();
+		wls_print();
+		_delay_ms(500);
+		while (1)
+		{
+			read_wls();
+			
+			
+			
+			//NODE DETECTED
+			//all white
+			if (wls_middle < 150 && wls_left < 150 && wls_right < 150)
+				break;
+				
+			
+			
+			else if (wls_middle < 150 && (wls_left < 150 || wls_right < 150))
+			{
+				velocity(120,120);
+				if(isWhite_node)
+					break;
+				
+				else
+				{
+				
+					if(wls_left < 150)
+					turn_left();
+					else if (wls_right < 150)
+					turn_right();
+					_delay_ms(5);
+					stopmm();
+				}
+				
+				
+			}
+			
+			
+			else if (wls_middle > 150 && (wls_left > 150 || wls_right> 150))
+			{
+				velocity(120,120);
+				
+				
+				 if(wls_left < 150)
+				{
+					soft_left();
+					_delay_ms(25);
+				}
+				else if(wls_right < 150)
+				{
+					soft_right();
+					_delay_ms(25);
+				}
+			}
+			//else if(wls_middle > 150 && wls_left < 100 && wls_right > 150)
+			else
+			{
+				velocity(150,132);
+				forward();
+			}
+		}
+		
+  		left=0;
+  		right=0;
+  		while(left<250 && right<250)
+  		{
+  			velocity(150,132);
+  			forward();
+  		}
+ 		stopmm();
+		//_delay_ms(1000);
+		wls_print();
+		_delay_ms(1000);
+		//velocity(120,120);
+		LCD_Clear();
+		
+		
+		while(wls_middle>150)
+		{
+			if(wls_left <190 || wls_left< wls_right)
+			turn_left();
+			else if(wls_right<190 || wls_right< wls_left )
+			turn_right();
+			_delay_ms(50);
+			read_wls();
+		}
+		stopmm();
 	}
 
 }
@@ -651,17 +1427,17 @@ void all_sensor_white()
 	int time_passed = 0;
 	int max_time = 1;
 	int i = 0;
-	unsigned char new_state = 'l';
+	//unsigned char new_state = 'l';
 	velocity(110,110);
 
 
 
 	while (wls_middle <50)
 	{
-		max_time *= 2;
+		max_time *= 4;
 		if (new_state == 'r')
 		{
-			while ((time_passed < max_time) && wls_middle <50)
+			while ((time_passed < max_time) && (wls_middle <50))
 			{
 
 				turn_left();
@@ -686,7 +1462,7 @@ void all_sensor_white()
 
 		if (new_state == 'l')
 		{
-			while ((time_passed < max_time) && wls_middle <50)
+			while ((time_passed < max_time) && (wls_middle <50))
 			{
 				
 
@@ -723,12 +1499,12 @@ void forward_wls(int node,int speed)
 	read_wls();
 	while (wls_middle > 100 && wls_left > 100 && wls_right > 100)
 	{
-		velocity(150,132);
+		velocity(speed,speed*135/150);
 		forward();
 		read_wls();
 		
 	}
-	velocity(150,135);
+	velocity(speed,speed*135/150);
 	forward();
 	while (1)
 	{
@@ -737,9 +1513,10 @@ void forward_wls(int node,int speed)
 		
 		
 		//NODE DETECTED
-		if (wls_middle > 100 && wls_left > 100 && wls_right > 100)
+		//if (wls_middle > 100 && wls_left > 100 && wls_right > 100)
+		if (wls_middle > 100 && (wls_left > 100 || wls_right > 100))
 		{
-			velocity(150,132);
+			velocity(speed,speed*135/150);
 			backward();
 			_delay_ms(30);
 			stopmm();
@@ -756,7 +1533,7 @@ void forward_wls(int node,int speed)
 			
 			while (wls_middle > 100 && wls_left > 100 && wls_right > 100)
 			{
-				velocity(150, 132);
+				velocity(speed,speed*135/150);
 				forward();
 				_delay_ms(30);
 				read_wls();
@@ -765,26 +1542,26 @@ void forward_wls(int node,int speed)
 			stopmm();
 			_delay_ms(250);
 		}
-		else if (wls_middle > 100 && (wls_left > 100 || wls_right > 100))
-		{
-			velocity(120,120);
-			if(i==3)
-			{
-				backward();
-				_delay_ms(15);
-			}
-			
-			if(wls_left < 100)
-			turn_right();
-			else if (wls_right < 100)
-			turn_left();
-			_delay_ms(5);
-			stopmm();
-			i++;
-			
-			
-		}
-		
+// 		else if (wls_middle > 100 && (wls_left > 100 || wls_right > 100))
+// 		{
+// 			velocity(120,120);
+// 			if(i==3)
+// 			{
+// 				backward();
+// 				_delay_ms(15);
+// 			}
+// 			
+// 			if(wls_left < 100)
+// 			turn_right();
+// 			else if (wls_right < 100)
+// 			turn_left();
+// 			_delay_ms(5);
+// 			stopmm();
+// 			i++;
+// 			
+// 			
+// 		}
+// 		
 		
 		else if (wls_middle < 100 && (wls_left > 100 || wls_right> 100))
 		{
@@ -805,7 +1582,7 @@ void forward_wls(int node,int speed)
 		//else if(wls_middle > 150 && wls_left < 100 && wls_right > 150)
 		else
 		{
-			velocity(150,132);
+			velocity(speed,speed*135/150);
 			forward();
 		}
 		
@@ -838,7 +1615,7 @@ void line_follower()
 			velocity(150,132);
 			stopmm();
 			soft_left();
-			_delay_ms(300);
+			_delay_ms(270);
 			break;
 		}
 		else if (wls_middle > 100 && (wls_left > 100 || wls_right > 100))
@@ -995,13 +1772,28 @@ void forward_wls_zz(int node,int speed)
 void left_turn_wls(void)
 {
 	
-	
-	velocity(120,120);
-	forward();
-	_delay_ms(200);
-	soft_left();
-	_delay_ms(250);
+	left=0;
+	right=0;
+	while(left<100 && right<100)
+	{
+		velocity(150,132);
+		forward();
+	}
+	stopmm();
+ 	right=0;
+ 	while(right<25)
+ 	{
+ 		velocity(150,132);
+ 		soft_left();
+ 	}
+// 	velocity(120,120);
+// 	forward();
+// 	_delay_ms(200);
+// 	soft_left();
+// 	_delay_ms(250);
 	read_wls();
+	wls_print();
+	_delay_ms(1000);
 	while (wls_middle < 130)
 	{
 		velocity(110,110);
@@ -1014,12 +1806,27 @@ void left_turn_wls(void)
 }
 void right_turn_wls(void)
 {
-	velocity(120,120);
-	forward();
-	_delay_ms(200);
-	soft_right();
-	_delay_ms(250);
+	left=0;
+	right=0;
+	while(left<100 && right<100)
+	{
+		velocity(150,132);
+		forward();
+	}
+	stopmm();
+ 	left=0;
+ 	while(left<25)
+ 	{
+ 		velocity(150,132);
+ 		soft_right();
+ 	}
+	stopmm();
+// 	_delay_ms(200);
+// 	soft_right();
+// 	_delay_ms(250);
 	read_wls();
+	wls_print();
+	_delay_ms(1000);
 	while (wls_middle < 130)
 	{
 		velocity(115,115);
@@ -1028,13 +1835,14 @@ void right_turn_wls(void)
 		read_wls();
 
 	}
+	stopmm();
 }
 
 
 void buzzer()
 {
 	DDRD=0xF0;
-	for(int i=0;i<2500;i++)       //5 seconds 25500
+	for(int i=0;i<23300;i++)       //5 seconds 25500
 	{
 		PORTD=0b10000000;
 		_delay_us(100);
@@ -1062,6 +1870,68 @@ void turn_180()
 	stopmm();
 }
 
+void servo0(int initial,int final)
+{
+	if(initial<=525 && final<=525)
+	{
+		servo01(initial,final);
+	}
+	else if(initial<=525 && final>525)
+	{
+		servo01(initial,525);
+		servo00(97,final-525);
+		
+	}
+	else if(initial>=525 && final<525)
+	{
+		servo00(initial-525,97);
+		servo01(525,final);	
+	}
+	else if(initial>=525 && final>=525)
+	{
+		servo00(initial-525,final-525);
+	}
+}
+void servo00(int initial,int final)
+{
+	if(initial<final)
+	{
+		for(int i=initial;i<=final;i++)
+		{
+			OCR3A = i;
+			_delay_ms(5);
+		}
+	}
+	else if(final<initial)
+	{
+		for(int i=initial;i>=final;i--)
+		{
+			OCR3A = i;
+			_delay_ms(5);
+		}
+	}
+}
+
+void servo01(int initial,int final)
+{
+	if(initial<final)
+	{
+		for(int i=initial;i<=final;i++)
+		{
+			OCR3B = i;
+			_delay_ms(5);
+		}
+	}
+	else if(final<initial)
+	{
+		for(int i=initial;i>=final;i--)
+		{
+			OCR3B = i;
+			_delay_ms(5);
+		}
+	}
+	
+}
 void servo1(int initial,int final)
 {
 	if(initial<final)
@@ -1251,7 +2121,6 @@ void soft_left()
 {
 	PORTD =0b00000100;
 }
-
 void pick_bot()
 {
 	//read_wls();
@@ -1272,354 +2141,535 @@ void pick_bot()
 	//}
 	//stopmm();
 	servo2(450,355);
-	servo1(350,110);
+	servo1(370,110);
 	servo2(355,260);
 	servo4(300,150);
-	
-	servo1(110,350);
-	servo2(270,355);
+	servo1(110,270);
+	servo2(260,355);
+	servo1(270,370);
 	servo2(355,450);
 }
 void place_lr()
 {
 	servo2(450,326);
-	servo1(350,206);
+	servo1(370,206);
 	servo4(150,300);
-	servo1(206,350);
+	servo1(206,270);
 	servo2(326,355);
+	servo1(270,370);
 	servo2(355,450);
 	
 }
 void place_hr()
 {
 	servo2(450,300);
-	servo1(350,290);
+	servo1(370,290);
 	servo4(150,300);
-	servo1(290,350);
+	servo1(290,365);
 	servo2(300,450);
 	
 	
 }
-void place_in(int d, int pi, int pl)
+void place_in(int d, int pi, int pl)                // pl=place position
 {
+	//pick 1,2,3,4-on the bot, 5-outside, 6-inside
+	//place1,2,3,4-on the bot, 5-outside low rise, 6- outside high rise , 7-inside, 8-front low rise, 9-front high rise
+	
+	_delay_ms(100);
 	int a;
 	if(d==clk)
 	{
 		if(pi==5)
-		a=1;
+		a=316;
 		else if(pi==6)
-		a=2;
+		a=860;
 	}
 	else if(d==anclk)
 	{
 		if(pi==5)
-		a=2;
+		a=860;
 		else if(pi==6)
-		a=1;
+		a=316;
 	}
 	
 	
-	if(a==1)
+	if(a==316)
 	{
 		if(pl==1)
 		{
-			stepper(stepc,1800);
+			servo2(450,420);
+			servo0(a,780);
+			//stepper(stepc,1800);
+			servo2(420,450);
 			servo3(316,370);
-			servo1(350, 240);
-			servo4(150, 300);
-			servo1(240,350);
-			servo3(370,316);
-			stepper(stepac,1000);
+			servo1(370, 250);
 			
+			servo4(150, 300);
+			servo1(250,370);
+			servo3(370,316);
+			//stepper(stepac,1000);
+			servo0(780,97);
 		}
 		else if(pl==2)
 		{
-			stepper(stepc,1000);
+			servo2(450,420);
+			servo0(a,1000);
+			servo2(420,450);
+			//stepper(stepc,1000);
 			servo3(316,370);
-			servo1(350, 240);
-			servo4(150, 300);
-			servo1(240,350);
-			servo3(370,316);
-			stepper(stepac,200);
+			servo1(370, 250);
 			
+			servo4(150, 300);
+			servo1(250,370);
+			servo3(370,316);
+			//stepper(stepac,200);
+			servo0(1000,97);
 		}
 		else if(pl==3)
 		{
-			stepper(stepc,200);
+			servo2(450,420);
+			servo0(a,243);
+			servo2(420,450);
+			//stepper(stepc,200);
 			servo3(316,370);
-			servo1(350, 240);
+			servo1(370, 250);
+			
 			servo4(150, 300);
-			servo1(240,350);
+			servo1(250,370);
 			servo3(370,316);
-			stepper(stepc,600);
+			servo0(243,97);
+			//stepper(stepc,600);
 		}
 		else if(pl==4)
 		{
-			stepper(stepac,200);
+			servo2(450,420);
+			servo0(a,460);
+			servo2(420,450);
+			//stepper(stepac,200);
 			servo3(316,370);
-			servo1(350, 240);
+			servo1(370, 250);
+			
 			servo4(150, 300);
-			servo1(240,350);
+			servo1(250,370);
 			servo3(370,316);
-			stepper(stepc,1000);
+			servo0(460,97);
+			//stepper(stepc,1000);
 		}
 		
 	}
-	else if(a==2)
+	else if(a==860)
 	{
 		if(pl==1)
 		{
-			stepper(stepc,200);
+			servo2(450,420);
+			servo0(a,780);
+			servo2(420,450);
+			/*stepper(stepc,200);*/
 			servo3(316,370);
-			servo1(350, 240);
+			servo1(370, 250);
+			
 			servo4(150, 300);
-			servo1(240,350);
+			servo1(250,370);
 			servo3(370,316);
-			stepper(stepac,1000);
+			servo0(780,97);
+			//stepper(stepac,1000);
 			
 		}
 		else if(pl==2)
 		{
-			stepper(stepac,600);
+			servo2(450,420);
+			servo0(a,1000);
+			servo2(420,450);
+			//stepper(stepac,600);
 			servo3(316,370);
-			servo1(350, 240);
+			servo1(370, 250);
 			servo4(150, 300);
-			servo1(240,350);
+			servo1(250,370);
 			servo3(370,316);
-			stepper(stepac,200);
+			servo0(1000,97);
+			//stepper(stepac,200);
 			
 		}
 		else if(pl==3)
 		{
-			stepper(stepac,1400);
+			servo2(450,420);
+			servo0(a,243);
+			servo2(420,450);
+			//stepper(stepac,1400);
 			servo3(316,370);
-			servo1(350, 240);
+			servo1(370, 250);
 			servo4(150, 300);
-			servo1(240,350);
+			servo1(250,370);
 			servo3(370,316);
-			stepper(stepc,600);
+			servo0(243,97);
+			//stepper(stepc,600);
 		}
 		else if(pl==4)
 		{
-			stepper(stepac,1800);
+			servo2(450,420);
+			servo0(a,460);
+			servo2(420,450);
+			//stepper(stepac,2200);
 			servo3(316,370);
-			servo1(350, 240);
+			servo1(370, 250);
 			servo4(150, 300);
-			servo1(240,350);
+			servo1(250,370);
 			servo3(370,316);
-			stepper(stepc,1000);
+			servo0(460,97);
+			//stepper(stepc,1400);
 		}
 	}
 }
 void pick_from(int d, int a, int p)
-{
+{//pick 1,2,3,4-on the bot, 5-outside, 6-inside
+	//place1,2,3,4-on the bot, 5-outside low rise, 6- outside high rise , 7-inside, 8-front low rise, 9-front high rise
 	switch(a)
 	{
 		case 1:
 		{
-			stepper(stepc, 1000);
+			servo2(450,420);
+			//stepper(stepc, 1000);
 			
+			servo0(97,780);
+			servo2(420,450);
 			servo3(316,370);
-			servo1(350, 230);
+			servo1(370, 250);
 			servo4(300, 150);
-			servo1(230,350);
+			servo2(450,420);
+			servo1(250,370);
 			servo3(370,316);
 			
 			if(d==clk)
 			{
 				if((p==5) || (p==6))
 				{
-					stepper(stepac, 1800);
+					servo0(780,316);
+					//stepper(stepac, 1800);
 				}
 				
 				else if(p==7)
 				{
-					stepper(stepac,200);
+					servo0(780,860);
+					//stepper(stepac,200);
 				}
 				else if((p==8) || (p==9))
 				{
-					stepper(stepac,1000);
+					servo0(780,97);
+					//stepper(stepac,1000);
 				}
 			}
 			else if(d==anclk)
 			{
 				if((p==5) || (p==6))
 				{
-					stepper(stepac, 200);
+					servo0(780,860);
+					//stepper(stepac, 200);
 				}
 				
 				else if(p==7)
 				{
-					stepper(stepac,1800);
+					servo0(780,316);
+					//stepper(stepac,1800);
 				}
 				else if((p==8) || (p==9))
 				{
-					stepper(stepac,1000);
+					servo0(780,97);
+					//stepper(stepac,1000);
 				}
 				
 			}
+			servo2(420,450);
 			break;
 		}
 		case 2:
 		{
-			stepper(stepc, 200);
+			servo2(450,420);
+			servo0(97,1000);
+			//stepper(stepc, 200);
+			servo2(420,450);
 			servo3(316,370);
-			servo1(350, 230);
+			servo1(370, 250);
 			servo4(300, 150);
-			servo1(230,350);
+			servo2(450,420);
+			servo1(250,370);
 			servo3(370,316);
 			if(d==clk)
 			{
 				if(p==5 || p==6)
 				{
-					stepper(stepac, 1000);
+					servo0(1000,316);
+					//stepper(stepac, 1000);
 				}
 				
 				else if(p==7)
 				{
-					stepper(stepc,600);
+					servo0(1000,860);
+					//stepper(stepc,600);
 				}
 				else if(p==8 || p==9)
 				{
-					stepper(stepac,200);
+					servo0(1000,97);
+					//stepper(stepac,200);
 				}
 			}
 			else if(d==anclk)
 			{
 				if(p==5 || p==6)
 				{
-					stepper(stepc, 600);
+					servo0(1000,860);
+					//stepper(stepc, 600);
 				}
 				else if(p==7)
 				{
-					stepper(stepac,1000);
+					servo0(1000,316);
+					//stepper(stepac,1000);
 				}
 				else if(p==8 || p==9)
 				{
-					stepper(stepac,200);
+					servo0(1000,97);
+					//stepper(stepac,200);
 				}
 				
 			}
-			
+			servo2(420,450);
 			break;
 		}
 		case 3:
 		{
-			stepper(stepac,200 );
+			servo2(450,420);
+			servo0(97,243);
+			//stepper(stepac,200 );
+			servo2(420,450);
 			servo3(316,370);
-			servo1(350, 230);
+			servo1(370, 250);
 			servo4(300, 150);
-			servo1(230,350);
+			servo2(450,420);
+			servo1(250,370);
 			servo3(370,316);
 			if(d==clk)
 			{
 				if(p==5 || p==6)
 				{
-					stepper(stepac, 600);
+					servo0(243,316);
+					//stepper(stepac, 600);
 				}
 				
 				else if(p==7)
 				{
-					stepper(stepc,1000);
+					servo0(243,860);
+					//stepper(stepc,1000);
 				}
 				else if(p==8 || p==9)
 				{
-					stepper(stepc,200);
+					servo0(243,97);
+					//stepper(stepc,200);
 				}
 			}
 			else if(d==anclk)
 			{
 				if(p==5 || p==6)
 				{
-					stepper(stepc, 1000);
+					servo0(243,860);
+					//stepper(stepc, 1000);
 				}
 				else if(p==7)
 				{
-					stepper(stepac,600);
+					servo0(243,316);
+					//stepper(stepac,600);
 				}
 				else if(p==8 || p==9)
 				{
-					stepper(stepc,200);
+					servo0(243,97);
+					//stepper(stepc,200);
 				}
 				
 			}
-			
+			servo2(420,450);
 			break;
 		}
 		case 4:
 		{
-			stepper(stepac, 1000);
+			servo2(450,420);
+			servo0(97,460);
+			servo2(420,450);
+			//stepper(stepac, 1400);
 			servo3(316,370);
-			servo1(350, 230);
+			servo1(370, 250);
 			servo4(300, 150);
-			servo1(230,350);
+			servo2(450,420);
+			servo1(250,370);
 			servo3(370,316);
 			if(d==clk)
 			{
 				if(p==5 || p==6)
 				{
-					stepper(stepc, 200);
+					servo0(460,316);
+					//stepper(stepc, 200);
 				}
 				
 				else if(p==7)
 				{
-					stepper(stepc,1800);
+					servo0(460,860);
+					//stepper(stepc,1800);
 				}
 				else if(p==8 || p==9)
 				{
-					stepper(stepc,1000);
+					servo0(460,97);
+					//stepper(stepc,1000);
 				}
 			}
 			else if(d==anclk)
 			{
 				if(p==5 || p==6)
 				{
-					stepper(stepc, 1800);
+					servo0(460,860);
+					//stepper(stepc, 2200);
 				}
 				else if(p==7)
 				{
-					stepper(stepac,200);
+					servo0(460,316);
+					//stepper(stepac,600);
 				}
 				else if(p==8 || p==9)
 				{
-					stepper(stepc,1000);
+					servo0(460,97);
+					//stepper(stepc,1400);
 				}
 				
 			}
 		}
+		servo2(420,450);
 		break;
 	}
 	
 }
 
-
-void papom(int dir, int pick, int place)
+void pop(int val,int node_value)
 {
-	velocity(120,120);
-	forward();
-	_delay_ms(800);
-	read_wls();
-	while(wls_middle<100)
-	{
-	if(wls_left>100 && wls_middle<100)
-	turn_left();
-	else if(wls_right>100 && wls_middle<100)
-	turn_right();
-	else if(wls_left>100)
-	turn_left();
-	else if(wls_right>100)
-	turn_right();
-	else
-	break;
-	_delay_ms(30);
-	read_wls();
+	//0 9
+	int i;
+	//pick 
+	if(val>0)
+	{ 
+		//which place is empty in bot for CM to place
+		for(i=0;i<4;i++)
+		{
+			
+			if(CM_place_in_bot[i]==0)
+				break;
+		}
+		// 5 out 6 in
+		if(mat_remain[node_value-1])
+		{
+			papom(5,i+1,node_value);
+			CM_place_in_bot[i]=node_value;
+			mat_remain[node_value-1]--;
+		}
+		else
+		{
+		  papom(6,i+1,node_value);
+		  CM_place_in_bot[i]=node_value;
+		  //no need i think
+		 /* mat_remain[node_value-1];*/
+		}
 	}
+	//place
+	else
+	{
+		//place1,2,3,4-on the bot, 5-outside low rise, 6- outside high rise , 7-inside, 8-front low rise, 9-front high rise
+		int a=0;
+		for(i=0;i<4;i++)
+		{
+			int place;
+			if(mat_req_for_house[node_value-7]>0)
+			{
+				if(CM_place_in_bot[i]==CM[2*(node_value-7)+a])
+				{
+					int state;
+					//in front facing
+					if(f==1)
+					{
+						//high rise
+					  if(high_or_low[node_value-7])
+						place=9;
+						//low rise
+					  else
+					   place=8;
+					}
+					else
+					{
+						//h5
+						if(node_value==11)
+							place=7;
+							//other houses
+						else
+						{
+							if(high_or_low[node_value-7])
+								place=6;
+							else
+								place=5;
+						}
+					}
+					LCD_Clear();
+					unsigned char c[10];
+					itoa(i+1,c,10);
+					LCD_String_xy(1,0,c);
+					LCD_String_xy(0,1,"place krunga");
+					_delay_ms(1000);
+					LCD_Clear();
+					papom(i+1,place,node_value);
+					CM_place_in_bot[i]=0;
+					i=-1;
+					a++;
+					mat_req_for_house[node_value-7]--;
+					
+				}
+			}
+			else
+				break;
+			
+		}
+	}
+	
+}
+void papom(int pick, int place,int node)
+{
+// 	velocity(120,120);
+// 	forward();
+// 	_delay_ms(800);
+// 	read_wls();
+		if(node!=11)
+		{
+			left=0;
+			right=0;
+			if((wls_middle>100 && wls_right>100 && wls_left>100))
+			{
+				while(left<170 && right<170)
+				{
+					velocity(150,132);
+					forward();
+				}
+			}
+	
+			stopmm();
+			wls_print();
+			_delay_ms(1000);
+			while(wls_middle<70)
+			{
+				if(wls_left>50 )
+					turn_left();
+				else if(wls_right>50 )
+					turn_right();
+				_delay_ms(10);
+				read_wls();
+			}
+		}
 	stopmm();
 		int i;
 		//direction ==1, clockise        direction ==0, anticlockwise
 		//pick 1,2,3,4-on the bot, 5-outside, 6-inside
 		//place1,2,3,4-on the bot, 5-outside low rise, 6- outside high rise , 7-inside, 8-front low rise, 9-front high rise
-		if(dir==clk)
+		if(direction==clk)
 		{
 			if(pick>0 )
 			{
@@ -1627,34 +2677,36 @@ void papom(int dir, int pick, int place)
 				{
 					case 1:
 					{
-						pick_from(dir,pick,place);
+						pick_from(direction,pick,place);
 						break;
 					}
 					case 2:
 					{
-						pick_from(dir,pick,place);
+						pick_from(direction,pick,place);
 						break;
 					}
 					case 3:
 					{
-						pick_from(dir,pick,place);
+						pick_from(direction,pick,place);
 						break;
 					}
 					case 4:
 					{
-						pick_from(dir,pick,place);
+						pick_from(direction,pick,place);
 						break;
 					}
 					case 5:
 					{
-						stepper(stepac, 800);
+						servo0(97,316);
+						//stepper(stepac, 800);
 						pick_bot();
 						break;
 						
 					}
 					case 6:
 					{
-						stepper(stepc, 780);
+						servo0(97,860);
+						//stepper(stepc, 780);
 						pick_bot();
 						break;
 					}
@@ -1668,50 +2720,49 @@ void papom(int dir, int pick, int place)
 				{
 					case 1:
 					{
-						place_in(dir,pick, place);
+						place_in(direction,pick, place);
 						break;
 					}
 					case 2:
 					{
-						place_in(dir,pick, place);
+						place_in(direction,pick, place);
 						break;
 					}
 					case 3:
 					{
-						place_in(dir,pick, place);
+						place_in(direction,pick, place);
 						break;
 					}
 					case 4:
 					{
-						place_in(dir,pick, place);
+						place_in(direction,pick, place);
 						break;
 					}
 					case 5:
 					{
 						place_lr();
-						if(dir==clk)
-						stepper(stepc,800);
-						else if(dir==anclk)
-						stepper(stepac,800);
+						
+						servo0(316,97);
+						//stepper(stepac,800);
 						
 						break;
 					}
 					case 6:
 					{
 						place_hr();
-						if(dir==clk)
-						stepper(stepc,800);
-						else if(dir==anclk)
-						stepper(stepac,800);
+						servo0(316,97);
+						//stepper(stepc,800);
 						break;
 					}
 					case 7:
 					{
-						place_lr();
-						if(dir==clk)
-						stepper(stepac,800);
-						else if(dir==anclk)
-						stepper(stepc,800);
+						servo2(450,350);
+						servo1(370,206);
+						servo4(150,300);
+						servo1(206,370);
+						servo2(350,450);
+						servo0(860,97);
+						//stepper(stepac,800);
 						break;
 					}
 					case 8:
@@ -1728,7 +2779,7 @@ void papom(int dir, int pick, int place)
 			}
 			
 		}
-		if(dir==anclk)
+		else if(direction==anclk)
 		{
 			if(pick>0 )
 			{
@@ -1736,34 +2787,36 @@ void papom(int dir, int pick, int place)
 				{
 					case 1:
 					{
-						pick_from(dir,pick,place);
+						pick_from(direction,pick,place);
 						break;
 					}
 					case 2:
 					{
-						pick_from(dir,pick,place);
+						pick_from(direction,pick,place);
 						break;
 					}
 					case 3:
 					{
-						pick_from(dir,pick,place);
+						pick_from(direction,pick,place);
 						break;
 					}
 					case 4:
 					{
-						pick_from(dir,pick,place);
+						pick_from(direction,pick,place);
 						break;
 					}
 					case 5:
 					{
-						stepper(stepc, 800);
+						servo0(97,860);
+						//stepper(stepc, 800);
 						pick_bot();
 						break;
 						
 					}
 					case 6:
 					{
-						stepper(stepac, 800);
+						servo0(97,316);
+						//stepper(stepac, 800);
 						pick_bot();
 						break;
 					}
@@ -1777,50 +2830,48 @@ void papom(int dir, int pick, int place)
 				{
 					case 1:
 					{
-						place_in(dir,pick, place);
+						place_in(direction,pick, place);
 						break;
 					}
 					case 2:
 					{
-						place_in(dir,pick, place);
+						place_in(direction,pick, place);
 						break;
 					}
 					case 3:
 					{
-						place_in(dir,pick, place);
+						place_in(direction,pick, place);
 						break;
 					}
 					case 4:
 					{
-						place_in(dir,pick, place);
+						place_in(direction,pick, place);
 						break;
 					}
 					case 5:
 					{
 						place_lr();
-						if(dir==clk)
-						stepper(stepc,800);
-						else if(dir==anclk)
-						stepper(stepac,800);
+						servo0(860,97);
+						//stepper(stepac,800);
 						
 						break;
 					}
 					case 6:
 					{
 						place_hr();
-						if(dir==clk)
-						stepper(stepc,800);
-						else if(dir==anclk)
-						stepper(stepac,800);
+						servo0(860,97);
+						//stepper(stepac,800);
 						break;
 					}
 					case 7:
 					{
-						place_lr();
-						if(dir==clk)
-						stepper(stepac,800);
-						else if(dir==anclk)
-						stepper(stepc,800);
+						servo2(450,350);
+						servo1(370,206);
+						servo4(150,300);
+						servo1(206,370);
+						servo2(350,450);
+						servo0(316,97);
+						//stepper(stepac,800);
 						break;
 					}
 					case 8:
@@ -1839,39 +2890,14 @@ void papom(int dir, int pick, int place)
 		}
 				
 	
-}
-	
-void stepper(int rot, int deg)
-{
-	
-	//rot = 1-clockwise   0-anticlockwise
-	
-	int i=0;
-	PORTA=0x1C;
-	
-	if(rot==stepc)
-	{
-		PORTA=0x1E;
-	}
-	
-	for(i=0;i<deg;i++)
-	{
-		
-		PORTA |= (1<<0);
-		_delay_us(500);
-		PORTA  &= ~(1<<0);
-		_delay_us(500);
-
-	}
-	PORTA=0x20;
 }
 
 void wall_follower()
 {
 	line_follower();
-	velocity(120,120);
+	velocity(130,130);
 	ir();
-	while(ir_left>75)
+	while(ir_left>55)
 	{
 		
 		ir();
@@ -1880,6 +2906,7 @@ void wall_follower()
 		{
 			break;
 		}
+		
 		if(ir_left<90)
 		{
 			soft_left();
@@ -1895,6 +2922,7 @@ void wall_follower()
 		_delay_ms(100);
 	}
 	
+	all_sensor_white();
 	forward_wls(1,150);
 }
 
@@ -1911,54 +2939,209 @@ void ir()
 	while(ADCSRA & (1<<ADSC)){}
 	ir_left=ADCH;
 }
+int availableMemory() {
+	int size = 8192; // Use 2048 with ATmega328
+	byte *buf;
 
+	while ((buf = (byte *) malloc(--size)) == NULL);
+
+	free(buf);
+
+	return size;
+}
 
 int main(void)
 {
-		
-	f=0;
-	direction = anclk;	
- 	all_init();
-// 	 while (1)
-// 	 {
-// 		 wls_print();
-// 		 _delay_ms(1000);
-// 		 LCD_Clear();
-// 	 }
-// 
-	velocity(150,150);
-	_delay_ms(1000);
+	_delay_ms(7000);
+ 	
+	all_init();
 	
-// 	travel(11,12);
-// 		travel(12,6);
-	//forward_wls(1,120);
-
-	shortest_path(1,3);
-	papom(direction,5,1);
-	papom(direction,6,3);
-	shortest_path(3,4);
-	papom(direction,1,5);
-	papom(direction,3,5);
+	//forward_wls(1,130);
+//  	left_turn_wls();
+//  	wls_print();
+//  	_delay_ms(1000);
+// 	 forward_wls_zz(1,150);
+ 	//follow_white_line(1,130,8);
+// 	_delay_ms(2000);
+ 	//follow_white_line(1,2,9);
+// 	buzzer();
+	//stopmm();
+//  	while(1)
+//  	{
+//  		wls_print();
+//  		_delay_ms(1000);
+//  		LCD_Clear();
+//  	}
+// 	forward_wls(1,150);
+// 	right_turn_wls();
+// 	wls_print();
 	
-	//shortest_path(12,6);
-//left_turn_wls();
-//forward_wls(1,150);
-// 	 wls_print();
-// 	 _delay_ms(5000);
-// 	 LCD_Clear();
-// 	follow_white_line(1,150);
-	stopmm();      //after everything
+	//follow_white_line(1,1,9);
+	task5();
+	buzzer();
+	//papom(2,7,11);
+	//pop(0,11);
+	 
 	
 	return 0;
+}
+void task5()
+{
+		f=0;
+		direction = clk;
+		//all_init();
+		//LCD_Init();
+		make_path();
+		unsigned char c[10];
+		//array to store node value of CM  and house
+		//					 M1  M2 M3  M4 M5  M6 H1  H2 H3  H4 H5
+		int node_value[11]={ 15, 3, 13, 5, 11, 7, 14, 4, 12, 6, 9};
+		int size = availableMemory();
+		
+		LCD_Clear();
+
+		itoa(size, c, 10);
+		LCD_String(c);
+		LCD_String_xy(1,1,"PHLE");
+		_delay_ms(1000);
+		LCD_Clear();
+
+		LCD_Clear();
+		for(int i=0;i<17;i++)
+		{
+			
+			
+			itoa(or_path[i], c, 10);
+			
+			if(i<9)
+			LCD_String_xy(0,2*i,c);
+			else
+			LCD_String_xy(1,2*(i-9),c);
+			_delay_ms(1000);
+		}
+		LCD_Clear();
+		
+		forward_wls(1,150);
+		if(node_value[or_path[0]-1]<9)
+		{
+			direction=anclk;
+			left_turn_wls();
+		}
+		else if(node_value[or_path[0]-1]>9)
+		{
+			direction=clk;
+			right_turn_wls();
+		}
+		LCD_String_xy(0,0,"start");
+		itoa(node_value[or_path[0]-1], 7, 10);
+		
+		LCD_String_xy(0,4,c);
+		LCD_String_xy(1,2,"ja rha");
+		_delay_ms(500);
+
+		//travel from start to or_path[0]
+		shortest_path(1,node_value[or_path[0]-1]);
+		pop(1,or_path[0]);
+		
+		//first going to H5
+		for(int i=0;i<4;i++)
+		{
+			LCD_Clear();
+			itoa(node_value[or_path[i]-1], c, 10);
+			
+			LCD_String_xy(0,0,c);
+			
+			itoa(node_value[or_path[i+1]-1], c, 10);
+			
+			LCD_String_xy(0,3,c);
+			LCD_String_xy(1,0,"ja rha");
+			_delay_ms(500);
+
+			
+
+			shortest_path(node_value[or_path[i]-1],node_value[or_path[i+1]-1]);
+			//1  4 6 6 11
+			if(i==3)
+				pop(0,or_path[i+1]);
+			
+			else
+				pop(1,or_path[i+1]);
+		}
+		for(int i=4;i<14;i++)
+		{
+			
+			LCD_Clear();
+			itoa(node_value[or_path[i]-1], c, 10);
+			
+			LCD_String_xy(0,0,c);
+			
+			itoa(node_value[or_path[i+1]-1], c, 10);
+			
+			LCD_String_xy(0,2,c);
+			LCD_String_xy(1,2,"ja rha");
+			_delay_ms(500);
+
+			
+            if(or_path[i+1]!=0)
+			{
+				shortest_path(node_value[or_path[i]-1],node_value[or_path[i+1]-1]);
+				pop(i%3,or_path[i+1]);	
+			}
+			else
+			{
+				i++;
+				if(or_path[i+1]!=0)
+				{
+					shortest_path(node_value[or_path[i-1]-1],node_value[or_path[i+1]-1]);
+					pop(i%3,or_path[i+1]);
+				}
+				else
+				{
+					i++;
+					shortest_path(node_value[or_path[i-2]-1],node_value[or_path[i+1]-1]);
+					pop(0,or_path[i+1]);
+				}
+			}
+		}
+		//
+		size = availableMemory();
+		LCD_Clear();
+
+		itoa(size, c, 10);
+		LCD_String(c);
+		LCD_String_xy(1,1,"PHLE");
+		_delay_ms(1000);
+		
+		
+		
+		//
+		// 	shortest_path(1,3);
+		// 	papom(direction,5,1);
+		// 	papom(direction,6,3);
+		// 	shortest_path(3,4);
+		// 	papom(direction,1,5);
+		// 	papom(direction,3,5);
+		
+		
+		//stopmm();      //after everything
+		
+		return 0;
 }
 
 
 
 
 
-
-
-
-
-
-
+//  	 delete_list(head);
+//  	 LCD_Clear();
+//  	 for(int i=0;i<12;i++)
+//  	 {
+	 	 
+	 	 
+// 	 	 itoa(or_path[i], c, 10);
+// 	 	 LCD_String(c);
+	 	 
+// 	 	 LCD_String_xy(0,i,c);
+// 	 	 _delay_ms(1000);
+//  	 }
+ 	 //LCD/*_Clear();*/
